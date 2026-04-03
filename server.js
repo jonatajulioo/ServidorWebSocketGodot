@@ -53,9 +53,8 @@ const playerlist = {
         // Jogador 1 começa na esquerda, Jogador 2 na direita
         let player = {
             uuid,
-            room: roomCode,
-            x: isFirstPlayer ? 550 : 700,
-            y: 300,
+             room: roomCode,
+            name: playerName,
         };
 
         this.players.push(player);
