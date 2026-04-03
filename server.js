@@ -89,7 +89,6 @@ wss.on("connection", (socket) => {
 
         switch (data.cmd) {
             case "create_room": {
-                // Extrai o nome do jogador (enviado pelo cliente)
                 const playerName = data.content.playerName || "Anônimo";
                 const newRoomId = generateRoomCode();
                 socket.roomId = newRoomId;
@@ -97,7 +96,10 @@ wss.on("connection", (socket) => {
                     players: {},
                     hostId: uuid
                 });
-                
+    
+                // 🔥 ADICIONE ESTA LINHA:
+                rooms.get(newRoomId).players[uuid] = socket;
+    
                 const newPlayer = playerlist.add(uuid, newRoomId, playerName);
                 
                 console.log(`Sala ${newRoomId} criada pelo jogador ${playerName} id: ${uuid}`);
