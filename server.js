@@ -3,26 +3,19 @@
 // Criado pelo Zee GameDev lindo de mãe
 // ========================
 
-// Importa as dependências
-const express = require("express");  // Framework para criar um servidor HTTP simples
-const WebSocket = require("ws");     // Biblioteca para trabalhar com WebSockets
-const { v4: uuidv4 } = require("uuid"); // Gera IDs únicos para identificar cada jogador
+const express = require("express");
+const WebSocket = require("ws");
+const { v4: uuidv4 } = require("uuid");
 
-// Cria o app Express e inicia o servidor HTTP
 const app = express();
 const PORT = process.env.PORT || 9090;
 const server = app.listen(PORT, () => {
     console.log(`Servidor iniciado na porta: ${PORT}`);
 });
 
-// Cria o servidor WebSocket em cima do servidor HTTP
 const wss = new WebSocket.Server({ server });
-
-// "rooms" é um Map que guarda todas as salas criadas
-// cada sala tem um código e a lista de jogadores conectados
 const rooms = new Map();
 
-// Função que gera um código aleatório para a sala (ex: 8GJ9Q)
 function generateRoomCode(length = 5) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let result = '';
@@ -30,8 +23,6 @@ function generateRoomCode(length = 5) {
     return result;
 }
 
-// Lista de jogadores conectados
-// Guarda posição (x,y) e a sala que pertence
 const playerlist = {
     players: [],
     
@@ -43,25 +34,23 @@ const playerlist = {
         return this.players.find(player => player.uuid === uuid);
     },
     
-    // Adiciona um novo jogador ao playerlist
-    add: function(uuid, roomCode) {
-        // Descobre se é o primeiro jogador da sala
+    // Adiciona um novo jogador – agora com nome e posição inicial
+    add: function(uuid, roomCode, playerName) {
         const playersInRoom = this.getByRoom(roomCode);
         const isFirstPlayer = playersInRoom.length === 0;
 
-        // Define posição inicial para o jogador
-        // Jogador 1 começa na esquerda, Jogador 2 na direita
         let player = {
-            uuid,
-             room: roomCode,
+            uuid: uuid,
+            room: roomCode,
             name: playerName,
+            x: isFirstPlayer ? 550 : 700,   // posição inicial padrão
+            y: 300,
         };
 
         this.players.push(player);
         return player;
     },
     
-    // Atualiza a posição de um jogador específico
     update: function(uuid, newX, newY) {
         const player = this.get(uuid);
         if (player) {
@@ -70,34 +59,25 @@ const playerlist = {
         }
     },
     
-    // Remove jogador da lista quando ele sai
     remove: function(uuid) {
         this.players = this.players.filter(player => player.uuid !== uuid);
     },
     
-    // Retorna todos os jogadores de uma sala específica
     getByRoom: function(roomCode) {
         return this.players.filter(player => player.room === roomCode);
     }
 };
 
-// ========================================
-// Evento disparado quando um cliente conecta
-// ========================================
 wss.on("connection", (socket) => {
-    const uuid = uuidv4();  // Gera ID único para o cliente
+    const uuid = uuidv4();
     socket.uuid = uuid;
     console.log(`Cliente conectado: ${uuid}`);
 
-    // Envia o UUID para o cliente assim que ele conecta
     socket.send(JSON.stringify({ 
         cmd: "joined_server", 
         content: { uuid: uuid } 
     }));
 
-    // ========================================
-    // Recebe mensagens do cliente
-    // ========================================
     socket.on("message", (message) => {
         let data;
         try { 
@@ -108,26 +88,25 @@ wss.on("connection", (socket) => {
         }
 
         switch (data.cmd) {
-                    
             case "create_room": {
-            const newRoomId = generateRoomCode();
-            socket.roomId = newRoomId;
-            rooms.set(newRoomId, { 
-                players: {},
-                hostId: uuid   // <-- guarda quem criou
-            });
-                // Adiciona o jogador à lista
-                const newPlayer = playerlist.add(uuid, newRoomId);
+                // Extrai o nome do jogador (enviado pelo cliente)
+                const playerName = data.content.playerName || "Anônimo";
+                const newRoomId = generateRoomCode();
+                socket.roomId = newRoomId;
+                rooms.set(newRoomId, { 
+                    players: {},
+                    hostId: uuid
+                });
                 
-                console.log(`Sala ${newRoomId} criada pelo jogador ${uuid}`);
+                const newPlayer = playerlist.add(uuid, newRoomId, playerName);
                 
-                // Responde ao cliente com o código da sala
+                console.log(`Sala ${newRoomId} criada pelo jogador ${playerName} id: ${uuid}`);
+                
                 socket.send(JSON.stringify({ 
                     cmd: "room_created", 
                     content: { code: newRoomId } 
                 }));
                 
-                // Manda o jogador spawnar a si mesmo
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
                     content: { player: newPlayer }
@@ -136,6 +115,7 @@ wss.on("connection", (socket) => {
             }
             
             case "join_room": {
+                const playerName = data.content.playerName || "Anônimo";
                 const roomCode = data.content.code.toUpperCase();
                 const roomToJoin = rooms.get(roomCode);
                 
@@ -147,28 +127,24 @@ wss.on("connection", (socket) => {
                     return;
                 }
                 
-                // Adiciona o jogador na sala
                 socket.roomId = roomCode;
                 roomToJoin.players[uuid] = socket;
                 
-                const newPlayer = playerlist.add(uuid, socket.roomId);
+                const newPlayer = playerlist.add(uuid, roomCode, playerName);
                 
-                console.log(`Jogador ${uuid} entrou na sala ${socket.roomId}`);
+                console.log(`Jogador ${playerName} id ${uuid} entrou na sala ${roomCode}`);
                 
-                // Informa o jogador que entrou com sucesso
                 socket.send(JSON.stringify({ 
                     cmd: "room_joined", 
-                    content: { code: socket.roomId } 
+                    content: { code: roomCode } 
                 }));
                 
-                // Spawna o jogador local no cliente
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
                     content: { player: newPlayer }
                 }));
                 
-                // Envia a lista dos jogadores já existentes na sala
-                const roomPlayers = playerlist.getByRoom(socket.roomId)
+                const roomPlayers = playerlist.getByRoom(roomCode)
                     .filter(p => p.uuid !== uuid);
                 
                 socket.send(JSON.stringify({
@@ -176,7 +152,6 @@ wss.on("connection", (socket) => {
                     content: { players: roomPlayers }
                 }));
                 
-                // Avisa os jogadores antigos que entrou um novo player
                 for (const clientUuid in roomToJoin.players) {
                     const client = roomToJoin.players[clientUuid];
                     if (client !== socket && client.readyState === WebSocket.OPEN) {
@@ -190,11 +165,9 @@ wss.on("connection", (socket) => {
             }
             
             case "position": {
-                // Atualiza posição do jogador no servidor
                 playerlist.update(uuid, data.content.x, data.content.y);
                 const room = rooms.get(socket.roomId);
                 if (room) {
-                    // Repassa para os outros jogadores da sala
                     for (const clientUuid in room.players) {
                         const client = room.players[clientUuid];
                         if (client !== socket && client.readyState === WebSocket.OPEN) {
@@ -213,7 +186,6 @@ wss.on("connection", (socket) => {
             }
             
             case "chat": {
-                // Repassa a mensagem de chat para todos os jogadores na sala
                 const room = rooms.get(socket.roomId);
                 if (room) {
                     for (const clientUuid in room.players) {
@@ -231,10 +203,10 @@ wss.on("connection", (socket) => {
                 }
                 break;
             }
+            
             case "request_start": {
                 const room = rooms.get(socket.roomId);
-                if (room && room.hostId === uuid) {  // só o host pode iniciar
-                    // Verifica se tem pelo menos 2 (ou quantidade mínima desejada)
+                if (room && room.hostId === uuid) {
                     if (Object.keys(room.players).length >= 2) {
                         for (const clientUuid in room.players) {
                             const client = room.players[clientUuid];
@@ -250,23 +222,18 @@ wss.on("connection", (socket) => {
                     }
                 }
                 break;
-            }    
+            }
         }
     });
 
-    // ========================================
-    // Evento disparado quando o cliente desconecta
-    // ========================================
     socket.on("close", () => {
         console.log(`Cliente desconectado: ${uuid}`);
-        
         playerlist.remove(uuid);
         
         const room = rooms.get(socket.roomId);
         if (room) {
             delete room.players[uuid];
             
-            // Avisa os outros jogadores que alguém saiu
             for (const clientUuid in room.players) {
                 const client = room.players[clientUuid];
                 if (client.readyState === WebSocket.OPEN) {
@@ -277,7 +244,6 @@ wss.on("connection", (socket) => {
                 }
             }
             
-            // Remove a sala se ela ficou vazia
             if (Object.keys(room.players).length === 0) {
                 rooms.delete(socket.roomId);
                 console.log(`Sala ${socket.roomId} vazia e removida.`);
