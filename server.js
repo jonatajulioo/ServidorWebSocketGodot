@@ -109,13 +109,14 @@ wss.on("connection", (socket) => {
         }
 
         switch (data.cmd) {
+                    
             case "create_room": {
-                // Gera novo código e cria sala
-                const newRoomId = generateRoomCode();
-                socket.roomId = newRoomId;
-                rooms.set(newRoomId, { players: {} });
-                rooms.get(newRoomId).players[uuid] = socket;
-                
+            const newRoomId = generateRoomCode();
+            socket.roomId = newRoomId;
+            rooms.set(newRoomId, { 
+                players: {},
+                hostId: uuid   // <-- guarda quem criou
+            });
                 // Adiciona o jogador à lista
                 const newPlayer = playerlist.add(uuid, newRoomId);
                 
@@ -186,21 +187,6 @@ wss.on("connection", (socket) => {
                         }));
                     }
                 }
-
-                // Quando há 2 ou mais jogadores na sala, começa o jogo
-                // Troque o "length >= 2" pelo número de jogadores que você quer na sala
-                if (Object.keys(roomToJoin.players).length >= 2) {
-                    console.log(`Sala ${socket.roomId} atingiu o número de jogadores. Começando o jogo!`);
-                    for (const clientUuid in roomToJoin.players) {
-                        const client = roomToJoin.players[clientUuid];
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                cmd: "start_game",
-                                content: {}
-                            }));
-                        }
-                    }
-                }
                 break;
             }
             
@@ -246,6 +232,26 @@ wss.on("connection", (socket) => {
                 }
                 break;
             }
+            case "request_start": {
+                const room = rooms.get(socket.roomId);
+                if (room && room.hostId === uuid) {  // só o host pode iniciar
+                    // Verifica se tem pelo menos 2 (ou quantidade mínima desejada)
+                    if (Object.keys(room.players).length >= 2) {
+                        for (const clientUuid in room.players) {
+                            const client = room.players[clientUuid];
+                            if (client.readyState === WebSocket.OPEN) {
+                                client.send(JSON.stringify({ cmd: "start_game", content: {} }));
+                            }
+                        }
+                    } else {
+                        socket.send(JSON.stringify({ 
+                            cmd: "error", 
+                            content: { msg: "Precisa de pelo menos 2 jogadores." } 
+                        }));
+                    }
+                }
+                break;
+            }    
         }
     });
 
