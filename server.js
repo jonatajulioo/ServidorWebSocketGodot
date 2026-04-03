@@ -165,6 +165,18 @@ wss.on("connection", (socket) => {
                 }
                 break;
             }
+
+            case "get_room_state": {
+                const room = rooms.get(socket.roomId);
+                if (room) {
+                    const playersInRoom = playerlist.getByRoom(socket.roomId);
+                    socket.send(JSON.stringify({
+                        cmd: "spawn_network_players",
+                        content: { players: playersInRoom }
+                    }));
+                }
+                break;
+            }
             
             case "position": {
                 playerlist.update(uuid, data.content.x, data.content.y);
