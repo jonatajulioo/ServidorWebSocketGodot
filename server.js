@@ -219,21 +219,29 @@ wss.on("connection", (socket) => {
             }
             
             case "request_start": {
+                console.log(`request_start from ${uuid} in room ${socket.roomId}`);
                 const room = rooms.get(socket.roomId);
+                if (!room) {
+                    console.log(`Room ${socket.roomId} not found`);
+                    return;
+                }
+                console.log(`Host id: ${room.hostId}, requesting id: ${uuid}`);
                 if (room && room.hostId === uuid) {
-                    if (Object.keys(room.players).length >= 2) {
+                    const playerCount = Object.keys(room.players).length;
+                    console.log(`Player count: ${playerCount}`);
+                    if (playerCount >= 2) {
                         for (const clientUuid in room.players) {
                             const client = room.players[clientUuid];
                             if (client.readyState === WebSocket.OPEN) {
                                 client.send(JSON.stringify({ cmd: "start_game", content: {} }));
-                            }
+                                console.log(`start_game sent to ${clientUuid}`);
+                            }        
                         }
                     } else {
-                        socket.send(JSON.stringify({ 
-                            cmd: "error", 
-                            content: { msg: "Precisa de pelo menos 2 jogadores." } 
-                        }));
+                        socket.send(JSON.stringify({ cmd: "error", content: { msg: "Need at least 2 players" } }));
                     }
+                } else {
+                    console.log(`Unauthorized: user ${uuid} is not host`);
                 }
                 break;
             }
