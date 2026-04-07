@@ -238,7 +238,7 @@ wss.on("connection", (socket) => {
                             }        
                         }
                     } else {
-                        socket.send(JSON.stringify({ cmd: "error", content: { msg: "Need at least 2 players" } }));
+                        socket.send(JSON.stringify({ cmd: "error", content: { msg: "Para iniciar precisa de dois ou mais jogadores" } }));
                     }
                 } else {
                     console.log(`Unauthorized: user ${uuid} is not host`);
