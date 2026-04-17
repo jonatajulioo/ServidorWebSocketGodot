@@ -5,7 +5,7 @@
 // - Salas
 // - Seleção de países
 // - Save JSON
-// - randomUUID (sem pacote uuid)
+// - Sala fecha se o host sair
 // ========================
 
 const express = require("express");
@@ -61,6 +61,7 @@ function initDatabase() {
                 room_code TEXT NOT NULL UNIQUE,
                 host_user_id INTEGER,
                 save_data TEXT NOT NULL,
+                status TEXT DEFAULT 'waiting',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -159,13 +160,14 @@ function saveRoomStateToDb(roomCode) {
     const json = JSON.stringify(saveData);
 
     db.run(`
-        INSERT INTO saves (room_code, host_user_id, save_data, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO saves (room_code, host_user_id, save_data, status, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(room_code) DO UPDATE SET
             host_user_id = excluded.host_user_id,
             save_data = excluded.save_data,
+            status = excluded.status,
             updated_at = CURRENT_TIMESTAMP
-    `, [roomCode, room.hostUserId || null, json], (err) => {
+    `, [roomCode, room.hostUserId || null, json, room.status], (err) => {
         if (err) {
             console.error(`Erro ao salvar sala ${roomCode} no SQLite:`, err.message);
         } else {
@@ -246,6 +248,10 @@ const playerlist = {
         this.players = this.players.filter(player => player.uuid !== uuid);
     },
 
+    removeByRoom: function (roomCode) {
+        this.players = this.players.filter(player => player.room !== roomCode);
+    },
+
     getByRoom: function (roomCode) {
         return this.players.filter(player => player.room === roomCode);
     }
@@ -286,9 +292,6 @@ wss.on("connection", (socket) => {
         }
 
         switch (data.cmd) {
-            // ========================
-            // Registro
-            // ========================
             case "register": {
                 const username = (data.content?.username || "").trim();
                 const email = (data.content?.email || "").trim().toLowerCase();
@@ -370,9 +373,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Login
-            // ========================
             case "login": {
                 const email = (data.content?.email || "").trim().toLowerCase();
                 const password = data.content?.password || "";
@@ -463,9 +463,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Criar sala
-            // ========================
             case "create_room": {
                 if (!requireAuth(socket)) {
                     socket.send(JSON.stringify({
@@ -524,9 +521,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Entrar em sala
-            // ========================
             case "join_room": {
                 if (!requireAuth(socket)) {
                     socket.send(JSON.stringify({
@@ -609,9 +603,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Estado da sala
-            // ========================
             case "get_room_state": {
                 const room = rooms.get(socket.roomId);
                 if (!room) break;
@@ -631,9 +622,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Movimento
-            // ========================
             case "position": {
                 playerlist.update(uuid, data.content.x, data.content.y);
 
@@ -656,9 +644,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Chat
-            // ========================
             case "chat": {
                 const room = rooms.get(socket.roomId);
                 if (room) {
@@ -680,9 +665,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Host inicia seleção de países
-            // ========================
             case "request_start": {
                 const room = rooms.get(socket.roomId);
 
@@ -743,9 +725,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Escolher país
-            // ========================
             case "select_country": {
                 const room = rooms.get(socket.roomId);
 
@@ -850,9 +829,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Salvar jogo
-            // ========================
             case "save_game": {
                 const room = rooms.get(socket.roomId);
 
@@ -878,9 +854,6 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // Carregar save
-            // ========================
             case "load_game": {
                 const roomCode = (data.content?.code || "").toUpperCase();
 
@@ -924,11 +897,37 @@ wss.on("connection", (socket) => {
     socket.on("close", () => {
         console.log(`Cliente desconectado: ${uuid}`);
 
-        playerlist.remove(uuid);
+        const roomCode = socket.roomId;
+        const room = rooms.get(roomCode);
 
-        const room = rooms.get(socket.roomId);
         if (room) {
+            const isHost = room.hostId === uuid;
+
+            if (isHost) {
+                saveRoomState(roomCode);
+                saveRoomStateToDb(roomCode);
+
+                for (const clientUuid in room.players) {
+                    const client = room.players[clientUuid];
+                    if (client && client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({
+                            cmd: "room_closed",
+                            content: {
+                                msg: "A sala foi encerrada porque o host saiu."
+                            }
+                        }));
+                    }
+                }
+
+                playerlist.removeByRoom(roomCode);
+                rooms.delete(roomCode);
+
+                console.log(`Sala ${roomCode} encerrada porque o host saiu.`);
+                return;
+            }
+
             delete room.players[uuid];
+            playerlist.remove(uuid);
 
             for (const clientUuid in room.players) {
                 const client = room.players[clientUuid];
@@ -940,31 +939,10 @@ wss.on("connection", (socket) => {
                 }
             }
 
-            if (Object.keys(room.players).length === 0) {
-                saveRoomState(socket.roomId);
-                saveRoomStateToDb(socket.roomId);
-                rooms.delete(socket.roomId);
-                console.log(`Sala ${socket.roomId} vazia e removida da memória.`);
-            } else {
-                if (room.hostId === uuid) {
-                    const remainingPlayers = Object.keys(room.players);
-                    room.hostId = remainingPlayers[0];
-
-                    const newHostSocket = room.players[room.hostId];
-                    room.hostUserId = newHostSocket?.userId || null;
-
-                    broadcastToRoom(room, {
-                        cmd: "host_changed",
-                        content: {
-                            hostId: room.hostId,
-                            hostUserId: room.hostUserId
-                        }
-                    });
-                }
-
-                saveRoomState(socket.roomId);
-                saveRoomStateToDb(socket.roomId);
-            }
+            saveRoomState(roomCode);
+            saveRoomStateToDb(roomCode);
+        } else {
+            playerlist.remove(uuid);
         }
     });
 });
