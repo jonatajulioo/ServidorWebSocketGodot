@@ -1,20 +1,20 @@
 // ========================
 // Servidor Multiplayer para Godot
 // Com:
-// - Login e Registro
-// - SQLite
+// - Registro/Login com SQLite
 // - Salas
 // - Seleção de países
 // - Save JSON
+// - randomUUID (sem pacote uuid)
 // ========================
 
 const express = require("express");
 const WebSocket = require("ws");
-const { randomUUID } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const bcrypt = require("bcrypt");
+const { randomUUID } = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 9090;
@@ -32,21 +32,45 @@ if (!fs.existsSync(SAVE_DIR)) {
 }
 
 // ========================
-// Banco SQLite
+// SQLite
 // ========================
-const db = new sqlite3.Database(path.join(__dirname, "game.db"));
-
-db.serialize(() => {
-    db.run(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+const dbPath = path.join(__dirname, "game.db");
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+        console.error("Erro ao abrir SQLite:", err.message);
+    } else {
+        console.log("SQLite conectado em:", dbPath);
+    }
 });
+
+function initDatabase() {
+    db.serialize(() => {
+        db.run(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        db.run(`
+            CREATE TABLE IF NOT EXISTS saves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                room_code TEXT NOT NULL UNIQUE,
+                host_user_id INTEGER,
+                save_data TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        db.run(`PRAGMA journal_mode = WAL;`);
+    });
+}
+
+initDatabase();
 
 // ========================
 // Utilidades
@@ -89,6 +113,9 @@ function getSerializablePlayers(roomCode) {
     }));
 }
 
+// ========================
+// Save em JSON
+// ========================
 function saveRoomState(roomCode) {
     const room = rooms.get(roomCode);
     if (!room) return;
@@ -107,20 +134,68 @@ function saveRoomState(roomCode) {
 
     const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
     fs.writeFileSync(filePath, JSON.stringify(saveData, null, 2), "utf-8");
-    console.log(`Sala ${roomCode} salva com sucesso.`);
+    console.log(`Sala ${roomCode} salva em JSON.`);
 }
 
-function loadRoomState(roomCode) {
-    const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
-    if (!fs.existsSync(filePath)) return null;
+// ========================
+// Save no SQLite
+// ========================
+function saveRoomStateToDb(roomCode) {
+    const room = rooms.get(roomCode);
+    if (!room) return;
 
-    try {
-        const raw = fs.readFileSync(filePath, "utf-8");
-        return JSON.parse(raw);
-    } catch (err) {
-        console.error(`Erro ao carregar save da sala ${roomCode}:`, err);
-        return null;
-    }
+    const saveData = {
+        roomCode: roomCode,
+        hostId: room.hostId,
+        hostUserId: room.hostUserId,
+        status: room.status,
+        selectedCountries: room.selectedCountries,
+        gameState: room.gameState,
+        createdAt: room.createdAt,
+        savedAt: Date.now(),
+        players: getSerializablePlayers(roomCode)
+    };
+
+    const json = JSON.stringify(saveData);
+
+    db.run(`
+        INSERT INTO saves (room_code, host_user_id, save_data, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(room_code) DO UPDATE SET
+            host_user_id = excluded.host_user_id,
+            save_data = excluded.save_data,
+            updated_at = CURRENT_TIMESTAMP
+    `, [roomCode, room.hostUserId || null, json], (err) => {
+        if (err) {
+            console.error(`Erro ao salvar sala ${roomCode} no SQLite:`, err.message);
+        } else {
+            console.log(`Sala ${roomCode} salva no SQLite.`);
+        }
+    });
+}
+
+function loadRoomStateFromDb(roomCode, callback) {
+    db.get(
+        "SELECT save_data FROM saves WHERE room_code = ?",
+        [roomCode],
+        (err, row) => {
+            if (err) {
+                callback(err, null);
+                return;
+            }
+
+            if (!row) {
+                callback(null, null);
+                return;
+            }
+
+            try {
+                callback(null, JSON.parse(row.save_data));
+            } catch (e) {
+                callback(e, null);
+            }
+        }
+    );
 }
 
 // ========================
@@ -180,7 +255,7 @@ const playerlist = {
 // WebSocket
 // ========================
 wss.on("connection", (socket) => {
-   const uuid = randomUUID();
+    const uuid = randomUUID();
 
     socket.uuid = uuid;
     socket.roomId = null;
@@ -445,11 +520,12 @@ wss.on("connection", (socket) => {
                 }));
 
                 saveRoomState(newRoomId);
+                saveRoomStateToDb(newRoomId);
                 break;
             }
 
             // ========================
-            // Entrar na sala
+            // Entrar em sala
             // ========================
             case "join_room": {
                 if (!requireAuth(socket)) {
@@ -529,6 +605,7 @@ wss.on("connection", (socket) => {
                 }));
 
                 saveRoomState(roomCode);
+                saveRoomStateToDb(roomCode);
                 break;
             }
 
@@ -662,6 +739,7 @@ wss.on("connection", (socket) => {
                 });
 
                 saveRoomState(socket.roomId);
+                saveRoomStateToDb(socket.roomId);
                 break;
             }
 
@@ -738,6 +816,7 @@ wss.on("connection", (socket) => {
                 });
 
                 saveRoomState(socket.roomId);
+                saveRoomStateToDb(socket.roomId);
 
                 const playersInRoom = playerlist.getByRoom(socket.roomId);
                 const everyoneSelected = playersInRoom.length >= 2 && playersInRoom.every(p => p.country);
@@ -765,6 +844,7 @@ wss.on("connection", (socket) => {
                     });
 
                     saveRoomState(socket.roomId);
+                    saveRoomStateToDb(socket.roomId);
                 }
 
                 break;
@@ -789,6 +869,7 @@ wss.on("connection", (socket) => {
                 }
 
                 saveRoomState(socket.roomId);
+                saveRoomStateToDb(socket.roomId);
 
                 socket.send(JSON.stringify({
                     cmd: "game_saved",
@@ -802,20 +883,31 @@ wss.on("connection", (socket) => {
             // ========================
             case "load_game": {
                 const roomCode = (data.content?.code || "").toUpperCase();
-                const savedRoom = loadRoomState(roomCode);
 
-                if (!savedRoom) {
+                loadRoomStateFromDb(roomCode, (err, savedRoom) => {
+                    if (err) {
+                        console.error(err);
+                        socket.send(JSON.stringify({
+                            cmd: "error",
+                            content: { msg: "Erro ao carregar save." }
+                        }));
+                        return;
+                    }
+
+                    if (!savedRoom) {
+                        socket.send(JSON.stringify({
+                            cmd: "error",
+                            content: { msg: "Save não encontrado." }
+                        }));
+                        return;
+                    }
+
                     socket.send(JSON.stringify({
-                        cmd: "error",
-                        content: { msg: "Save não encontrado." }
+                        cmd: "loaded_game_data",
+                        content: savedRoom
                     }));
-                    break;
-                }
+                });
 
-                socket.send(JSON.stringify({
-                    cmd: "loaded_game_data",
-                    content: savedRoom
-                }));
                 break;
             }
 
@@ -850,6 +942,7 @@ wss.on("connection", (socket) => {
 
             if (Object.keys(room.players).length === 0) {
                 saveRoomState(socket.roomId);
+                saveRoomStateToDb(socket.roomId);
                 rooms.delete(socket.roomId);
                 console.log(`Sala ${socket.roomId} vazia e removida da memória.`);
             } else {
@@ -870,6 +963,7 @@ wss.on("connection", (socket) => {
                 }
 
                 saveRoomState(socket.roomId);
+                saveRoomStateToDb(socket.roomId);
             }
         }
     });
