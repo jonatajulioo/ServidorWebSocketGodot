@@ -1,10 +1,11 @@
 // ========================
-// Servidor Multiplayer Simples para Godot
-// Reescrito com:
-// - salas
-// - seleção de países
-// - save JSON
-// - mínimo 2 e máximo 8 jogadores
+// Servidor Multiplayer para Godot
+// Com:
+// - Login e Registro
+// - SQLite
+// - Salas
+// - Seleção de países
+// - Save JSON
 // ========================
 
 const express = require("express");
@@ -12,10 +13,13 @@ const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
+const sqlite3 = require("sqlite3").verbose();
+const bcrypt = require("bcrypt");
 
 const app = express();
 const PORT = process.env.PORT || 9090;
-const server = app.listen(PORT, () => {
+
+const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Servidor iniciado na porta: ${PORT}`);
 });
 
@@ -27,6 +31,26 @@ if (!fs.existsSync(SAVE_DIR)) {
     fs.mkdirSync(SAVE_DIR, { recursive: true });
 }
 
+// ========================
+// Banco SQLite
+// ========================
+const db = new sqlite3.Database(path.join(__dirname, "game.db"));
+
+db.serialize(() => {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+});
+
+// ========================
+// Utilidades
+// ========================
 function generateRoomCode(length = 5) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let result = "";
@@ -34,6 +58,10 @@ function generateRoomCode(length = 5) {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return result;
+}
+
+function requireAuth(socket) {
+    return socket.isAuthenticated && socket.userId !== null;
 }
 
 function broadcastToRoom(room, payload) {
@@ -45,6 +73,59 @@ function broadcastToRoom(room, payload) {
     }
 }
 
+function getRoomByCode(roomCode) {
+    return rooms.get(roomCode);
+}
+
+function getSerializablePlayers(roomCode) {
+    return playerlist.getByRoom(roomCode).map(player => ({
+        uuid: player.uuid,
+        userId: player.userId,
+        room: player.room,
+        name: player.name,
+        x: player.x,
+        y: player.y,
+        country: player.country || null
+    }));
+}
+
+function saveRoomState(roomCode) {
+    const room = rooms.get(roomCode);
+    if (!room) return;
+
+    const saveData = {
+        roomCode: roomCode,
+        hostId: room.hostId,
+        hostUserId: room.hostUserId,
+        status: room.status,
+        selectedCountries: room.selectedCountries,
+        gameState: room.gameState,
+        createdAt: room.createdAt,
+        savedAt: Date.now(),
+        players: getSerializablePlayers(roomCode)
+    };
+
+    const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(saveData, null, 2), "utf-8");
+    console.log(`Sala ${roomCode} salva com sucesso.`);
+}
+
+function loadRoomState(roomCode) {
+    const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
+    if (!fs.existsSync(filePath)) return null;
+
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        return JSON.parse(raw);
+    } catch (err) {
+        console.error(`Erro ao carregar save da sala ${roomCode}:`, err);
+        return null;
+    }
+}
+
+// ========================
+// Lista de jogadores online
+// ========================
 const playerlist = {
     players: [],
 
@@ -56,12 +137,17 @@ const playerlist = {
         return this.players.find(player => player.uuid === uuid);
     },
 
-    add: function (uuid, roomCode, playerName) {
+    getByUserId: function (userId) {
+        return this.players.find(player => player.userId === userId);
+    },
+
+    add: function (uuid, userId, roomCode, playerName) {
         const playersInRoom = this.getByRoom(roomCode);
         const isFirstPlayer = playersInRoom.length === 0;
 
         const player = {
             uuid: uuid,
+            userId: userId,
             room: roomCode,
             name: playerName,
             x: isFirstPlayer ? 550 : 700,
@@ -90,57 +176,18 @@ const playerlist = {
     }
 };
 
-function getSerializablePlayers(roomCode) {
-    return playerlist.getByRoom(roomCode).map(player => ({
-        uuid: player.uuid,
-        room: player.room,
-        name: player.name,
-        x: player.x,
-        y: player.y,
-        country: player.country || null
-    }));
-}
-
-function saveRoomState(roomCode) {
-    const room = rooms.get(roomCode);
-    if (!room) return;
-
-    const saveData = {
-        roomCode: roomCode,
-        hostId: room.hostId,
-        status: room.status,
-        selectedCountries: room.selectedCountries,
-        gameState: room.gameState,
-        createdAt: room.createdAt,
-        savedAt: Date.now(),
-        players: getSerializablePlayers(roomCode)
-    };
-
-    const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(saveData, null, 2), "utf-8");
-    console.log(`Sala ${roomCode} salva com sucesso.`);
-}
-
-function loadRoomState(roomCode) {
-    const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
-
-    if (!fs.existsSync(filePath)) {
-        return null;
-    }
-
-    try {
-        const raw = fs.readFileSync(filePath, "utf-8");
-        return JSON.parse(raw);
-    } catch (err) {
-        console.error(`Erro ao carregar save da sala ${roomCode}:`, err);
-        return null;
-    }
-}
-
+// ========================
+// WebSocket
+// ========================
 wss.on("connection", (socket) => {
     const uuid = uuidv4();
+
     socket.uuid = uuid;
     socket.roomId = null;
+    socket.userId = null;
+    socket.username = null;
+    socket.email = null;
+    socket.isAuthenticated = false;
 
     console.log(`Cliente conectado: ${uuid}`);
 
@@ -149,19 +196,211 @@ wss.on("connection", (socket) => {
         content: { uuid: uuid }
     }));
 
-    socket.on("message", (message) => {
+    socket.on("message", async (message) => {
         let data;
 
         try {
             data = JSON.parse(message.toString());
         } catch (err) {
             console.error("Erro ao parsear mensagem:", err);
+            socket.send(JSON.stringify({
+                cmd: "error",
+                content: { msg: "Mensagem inválida." }
+            }));
             return;
         }
 
         switch (data.cmd) {
+            // ========================
+            // Registro
+            // ========================
+            case "register": {
+                const username = (data.content?.username || "").trim();
+                const email = (data.content?.email || "").trim().toLowerCase();
+                const password = data.content?.password || "";
+
+                if (!username || !email || !password) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: { msg: "Preencha usuário, email e senha." }
+                    }));
+                    break;
+                }
+
+                if (password.length < 6) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: { msg: "A senha deve ter pelo menos 6 caracteres." }
+                    }));
+                    break;
+                }
+
+                db.get(
+                    "SELECT id FROM users WHERE username = ? OR email = ?",
+                    [username, email],
+                    async (err, row) => {
+                        if (err) {
+                            console.error(err);
+                            socket.send(JSON.stringify({
+                                cmd: "error",
+                                content: { msg: "Erro no banco de dados." }
+                            }));
+                            return;
+                        }
+
+                        if (row) {
+                            socket.send(JSON.stringify({
+                                cmd: "error",
+                                content: { msg: "Usuário ou email já cadastrado." }
+                            }));
+                            return;
+                        }
+
+                        try {
+                            const hash = await bcrypt.hash(password, 10);
+
+                            db.run(
+                                "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+                                [username, email, hash],
+                                function (err) {
+                                    if (err) {
+                                        console.error(err);
+                                        socket.send(JSON.stringify({
+                                            cmd: "error",
+                                            content: { msg: "Erro ao criar conta." }
+                                        }));
+                                        return;
+                                    }
+
+                                    socket.send(JSON.stringify({
+                                        cmd: "register_success",
+                                        content: {
+                                            userId: this.lastID,
+                                            username: username,
+                                            email: email
+                                        }
+                                    }));
+                                }
+                            );
+                        } catch (e) {
+                            console.error(e);
+                            socket.send(JSON.stringify({
+                                cmd: "error",
+                                content: { msg: "Erro ao processar senha." }
+                            }));
+                        }
+                    }
+                );
+
+                break;
+            }
+
+            // ========================
+            // Login
+            // ========================
+            case "login": {
+                const email = (data.content?.email || "").trim().toLowerCase();
+                const password = data.content?.password || "";
+
+                if (!email || !password) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: { msg: "Informe email e senha." }
+                    }));
+                    break;
+                }
+
+                db.get(
+                    "SELECT * FROM users WHERE email = ?",
+                    [email],
+                    async (err, user) => {
+                        if (err) {
+                            console.error(err);
+                            socket.send(JSON.stringify({
+                                cmd: "error",
+                                content: { msg: "Erro no banco de dados." }
+                            }));
+                            return;
+                        }
+
+                        if (!user) {
+                            socket.send(JSON.stringify({
+                                cmd: "error",
+                                content: { msg: "Conta não encontrada." }
+                            }));
+                            return;
+                        }
+
+                        try {
+                            const ok = await bcrypt.compare(password, user.password_hash);
+
+                            if (!ok) {
+                                socket.send(JSON.stringify({
+                                    cmd: "error",
+                                    content: { msg: "Senha incorreta." }
+                                }));
+                                return;
+                            }
+
+                            socket.userId = user.id;
+                            socket.username = user.username;
+                            socket.email = user.email;
+                            socket.isAuthenticated = true;
+
+                            socket.send(JSON.stringify({
+                                cmd: "login_success",
+                                content: {
+                                    userId: user.id,
+                                    username: user.username,
+                                    email: user.email
+                                }
+                            }));
+                        } catch (e) {
+                            console.error(e);
+                            socket.send(JSON.stringify({
+                                cmd: "error",
+                                content: { msg: "Erro ao validar login." }
+                            }));
+                        }
+                    }
+                );
+
+                break;
+            }
+
+            case "me": {
+                if (!requireAuth(socket)) {
+                    socket.send(JSON.stringify({
+                        cmd: "not_logged_in",
+                        content: {}
+                    }));
+                    break;
+                }
+
+                socket.send(JSON.stringify({
+                    cmd: "me",
+                    content: {
+                        userId: socket.userId,
+                        username: socket.username,
+                        email: socket.email
+                    }
+                }));
+                break;
+            }
+
+            // ========================
+            // Criar sala
+            // ========================
             case "create_room": {
-                const playerName = data.content?.playerName || "Anônimo";
+                if (!requireAuth(socket)) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: { msg: "Você precisa estar logado para criar uma sala." }
+                    }));
+                    break;
+                }
+
+                const playerName = socket.username;
                 const newRoomId = generateRoomCode();
 
                 socket.roomId = newRoomId;
@@ -169,7 +408,8 @@ wss.on("connection", (socket) => {
                 rooms.set(newRoomId, {
                     players: {},
                     hostId: uuid,
-                    status: "waiting", // waiting | country_selection | playing
+                    hostUserId: socket.userId,
+                    status: "waiting",
                     selectedCountries: {},
                     gameState: null,
                     createdAt: Date.now()
@@ -177,9 +417,9 @@ wss.on("connection", (socket) => {
 
                 rooms.get(newRoomId).players[uuid] = socket;
 
-                const newPlayer = playerlist.add(uuid, newRoomId, playerName);
+                const newPlayer = playerlist.add(uuid, socket.userId, newRoomId, playerName);
 
-                console.log(`Sala ${newRoomId} criada pelo jogador ${playerName} id: ${uuid}`);
+                console.log(`Sala ${newRoomId} criada por ${playerName} (userId ${socket.userId})`);
 
                 socket.send(JSON.stringify({
                     cmd: "room_created",
@@ -196,6 +436,7 @@ wss.on("connection", (socket) => {
                     content: {
                         roomCode: newRoomId,
                         hostId: uuid,
+                        hostUserId: socket.userId,
                         status: "waiting",
                         players: getSerializablePlayers(newRoomId),
                         selectedCountries: {},
@@ -207,17 +448,28 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Entrar na sala
+            // ========================
             case "join_room": {
-                const playerName = data.content?.playerName || "Anônimo";
+                if (!requireAuth(socket)) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: { msg: "Você precisa estar logado para entrar em uma sala." }
+                    }));
+                    break;
+                }
+
+                const playerName = socket.username;
                 const roomCode = (data.content?.code || "").toUpperCase();
-                const roomToJoin = rooms.get(roomCode);
+                const roomToJoin = getRoomByCode(roomCode);
 
                 if (!roomToJoin) {
                     socket.send(JSON.stringify({
                         cmd: "error",
                         content: { msg: "Sala não encontrada." }
                     }));
-                    return;
+                    break;
                 }
 
                 const currentPlayers = playerlist.getByRoom(roomCode).length;
@@ -226,15 +478,15 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "A sala já está cheia. Máximo de 8 jogadores." }
                     }));
-                    return;
+                    break;
                 }
 
                 socket.roomId = roomCode;
                 roomToJoin.players[uuid] = socket;
 
-                const newPlayer = playerlist.add(uuid, roomCode, playerName);
+                const newPlayer = playerlist.add(uuid, socket.userId, roomCode, playerName);
 
-                console.log(`Jogador ${playerName} id ${uuid} entrou na sala ${roomCode}`);
+                console.log(`Jogador ${playerName} entrou na sala ${roomCode}`);
 
                 socket.send(JSON.stringify({
                     cmd: "room_joined",
@@ -268,6 +520,7 @@ wss.on("connection", (socket) => {
                     content: {
                         roomCode: roomCode,
                         hostId: roomToJoin.hostId,
+                        hostUserId: roomToJoin.hostUserId,
                         status: roomToJoin.status,
                         players: getSerializablePlayers(roomCode),
                         selectedCountries: roomToJoin.selectedCountries,
@@ -279,15 +532,19 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Estado da sala
+            // ========================
             case "get_room_state": {
                 const room = rooms.get(socket.roomId);
-                if (!room) return;
+                if (!room) break;
 
                 socket.send(JSON.stringify({
                     cmd: "room_state",
                     content: {
                         roomCode: socket.roomId,
                         hostId: room.hostId,
+                        hostUserId: room.hostUserId,
                         status: room.status,
                         players: getSerializablePlayers(socket.roomId),
                         selectedCountries: room.selectedCountries,
@@ -297,6 +554,9 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Movimento
+            // ========================
             case "position": {
                 playerlist.update(uuid, data.content.x, data.content.y);
 
@@ -319,6 +579,9 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Chat
+            // ========================
             case "chat": {
                 const room = rooms.get(socket.roomId);
                 if (room) {
@@ -329,6 +592,8 @@ wss.on("connection", (socket) => {
                                 cmd: "new_chat_message",
                                 content: {
                                     uuid: uuid,
+                                    userId: socket.userId,
+                                    username: socket.username,
                                     msg: data.content.msg
                                 }
                             }));
@@ -338,8 +603,10 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Host inicia seleção de países
+            // ========================
             case "request_start": {
-                console.log(`request_start from ${uuid} in room ${socket.roomId}`);
                 const room = rooms.get(socket.roomId);
 
                 if (!room) {
@@ -347,7 +614,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Sala não encontrada." }
                     }));
-                    return;
+                    break;
                 }
 
                 if (room.hostId !== uuid) {
@@ -355,7 +622,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Apenas o host pode iniciar." }
                     }));
-                    return;
+                    break;
                 }
 
                 const playersInRoom = playerlist.getByRoom(socket.roomId);
@@ -366,7 +633,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Para iniciar precisa de 2 ou mais jogadores." }
                     }));
-                    return;
+                    break;
                 }
 
                 if (playerCount > 8) {
@@ -374,7 +641,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Máximo de 8 jogadores por sala." }
                     }));
-                    return;
+                    break;
                 }
 
                 room.status = "country_selection";
@@ -398,6 +665,9 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Escolher país
+            // ========================
             case "select_country": {
                 const room = rooms.get(socket.roomId);
 
@@ -406,7 +676,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Sala não encontrada." }
                     }));
-                    return;
+                    break;
                 }
 
                 if (room.status !== "country_selection") {
@@ -414,7 +684,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "A seleção de países não está ativa." }
                     }));
-                    return;
+                    break;
                 }
 
                 const countryName = (data.content?.country || "").trim();
@@ -424,7 +694,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "País inválido." }
                     }));
-                    return;
+                    break;
                 }
 
                 const player = playerlist.get(uuid);
@@ -433,7 +703,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Jogador não encontrado." }
                     }));
-                    return;
+                    break;
                 }
 
                 if (player.country) {
@@ -441,7 +711,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Você já escolheu um país." }
                     }));
-                    return;
+                    break;
                 }
 
                 if (room.selectedCountries[countryName]) {
@@ -449,7 +719,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Esse país já foi escolhido." }
                     }));
-                    return;
+                    break;
                 }
 
                 player.country = countryName;
@@ -459,6 +729,7 @@ wss.on("connection", (socket) => {
                     cmd: "country_selected",
                     content: {
                         playerUuid: uuid,
+                        playerUserId: player.userId,
                         playerName: player.name,
                         country: countryName,
                         selectedCountries: room.selectedCountries,
@@ -478,6 +749,7 @@ wss.on("connection", (socket) => {
                         currentPlayerIndex: 0,
                         players: playersInRoom.map(p => ({
                             uuid: p.uuid,
+                            userId: p.userId,
                             name: p.name,
                             country: p.country
                         }))
@@ -498,6 +770,9 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Salvar jogo
+            // ========================
             case "save_game": {
                 const room = rooms.get(socket.roomId);
 
@@ -506,7 +781,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Sala não encontrada." }
                     }));
-                    return;
+                    break;
                 }
 
                 if (data.content?.gameState) {
@@ -522,6 +797,9 @@ wss.on("connection", (socket) => {
                 break;
             }
 
+            // ========================
+            // Carregar save
+            // ========================
             case "load_game": {
                 const roomCode = (data.content?.code || "").toUpperCase();
                 const savedRoom = loadRoomState(roomCode);
@@ -531,7 +809,7 @@ wss.on("connection", (socket) => {
                         cmd: "error",
                         content: { msg: "Save não encontrado." }
                     }));
-                    return;
+                    break;
                 }
 
                 socket.send(JSON.stringify({
@@ -541,17 +819,19 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            default:
+            default: {
                 socket.send(JSON.stringify({
                     cmd: "error",
                     content: { msg: `Comando desconhecido: ${data.cmd}` }
                 }));
                 break;
+            }
         }
     });
 
     socket.on("close", () => {
         console.log(`Cliente desconectado: ${uuid}`);
+
         playerlist.remove(uuid);
 
         const room = rooms.get(socket.roomId);
@@ -576,9 +856,16 @@ wss.on("connection", (socket) => {
                 if (room.hostId === uuid) {
                     const remainingPlayers = Object.keys(room.players);
                     room.hostId = remainingPlayers[0];
+
+                    const newHostSocket = room.players[room.hostId];
+                    room.hostUserId = newHostSocket?.userId || null;
+
                     broadcastToRoom(room, {
                         cmd: "host_changed",
-                        content: { hostId: room.hostId }
+                        content: {
+                            hostId: room.hostId,
+                            hostUserId: room.hostUserId
+                        }
                     });
                 }
 
