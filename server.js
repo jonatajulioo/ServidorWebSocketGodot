@@ -10,7 +10,7 @@
 
 const express = require("express");
 const WebSocket = require("ws");
-const { v4: uuidv4 } = require("uuid");
+const { randomUUID } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
@@ -180,7 +180,7 @@ const playerlist = {
 // WebSocket
 // ========================
 wss.on("connection", (socket) => {
-    const uuid = uuidv4();
+   const uuid = randomUUID();
 
     socket.uuid = uuid;
     socket.roomId = null;
