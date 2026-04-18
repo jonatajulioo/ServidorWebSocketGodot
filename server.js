@@ -374,74 +374,74 @@ wss.on("connection", (socket) => {
             }
 
             case "login": {
-                const email = (data.content?.email || "").trim().toLowerCase();
+                const username = (data.content?.username || "").trim();
                 const password = data.content?.password || "";
 
-                if (!email || !password) {
+                if (!username || !password) {
                     socket.send(JSON.stringify({
                         cmd: "error",
-                        content: { msg: "Informe email e senha." }
-                    }));
-                    break;
-                }
-
-                db.get(
-                    "SELECT * FROM users WHERE email = ?",
-                    [email],
-                    async (err, user) => {
-                        if (err) {
-                            console.error(err);
-                            socket.send(JSON.stringify({
-                                cmd: "error",
-                                content: { msg: "Erro no banco de dados." }
-                            }));
-                            return;
-                        }
-
-                        if (!user) {
-                            socket.send(JSON.stringify({
-                                cmd: "error",
-                                content: { msg: "Conta não encontrada." }
-                            }));
-                            return;
-                        }
-
-                        try {
-                            const ok = await bcrypt.compare(password, user.password_hash);
-
-                            if (!ok) {
-                                socket.send(JSON.stringify({
-                                    cmd: "error",
-                                    content: { msg: "Senha incorreta." }
-                                }));
-                                return;
-                            }
-
-                            socket.userId = user.id;
-                            socket.username = user.username;
-                            socket.email = user.email;
-                            socket.isAuthenticated = true;
-
-                            socket.send(JSON.stringify({
-                                cmd: "login_success",
-                                content: {
-                                    userId: user.id,
-                                    username: user.username,
-                                    email: user.email
-                                }
-                            }));
-                        } catch (e) {
-                            console.error(e);
-                            socket.send(JSON.stringify({
-                                cmd: "error",
-                                content: { msg: "Erro ao validar login." }
-                            }));
-                        }
-                    }
-                );
-
+                        content: { msg: "Informe usuário e senha." }
+                }));
                 break;
             }
+
+            db.get(
+                "SELECT * FROM users WHERE username = ?",
+                [username],
+                async (err, user) => {
+                    if (err) {
+                        console.error(err);
+                        socket.send(JSON.stringify({
+                            cmd: "error",
+                            content: { msg: "Erro no banco de dados." }
+                    }));
+                    return;
+                }
+
+            if (!user) {
+                socket.send(JSON.stringify({
+                    cmd: "error",
+                    content: { msg: "Conta não encontrada." }
+                }));
+                return;
+            }
+
+            try {
+                const ok = await bcrypt.compare(password, user.password_hash);
+
+                if (!ok) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: { msg: "Senha incorreta." }
+                    }));
+                    return;
+                }
+
+                socket.userId = user.id;
+                socket.username = user.username;
+                socket.email = user.email;
+                socket.isAuthenticated = true;
+
+                socket.send(JSON.stringify({
+                    cmd: "login_success",
+                    content: {
+                        userId: user.id,
+                        username: user.username,
+                        email: user.email
+                    }
+                }));
+            } catch (e) {
+                console.error(e);
+                socket.send(JSON.stringify({
+                    cmd: "error",
+                    content: { msg: "Erro ao validar login." }
+                }));
+            }
+        }
+    );
+
+    break;
+}
 
             case "me": {
                 if (!requireAuth(socket)) {
