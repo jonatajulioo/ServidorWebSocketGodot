@@ -98,6 +98,10 @@ function broadcastToRoom(room, payload) {
     }
 }
 
+function getCountriesArray(selectedCountries) {
+    return Object.keys(selectedCountries);
+}
+
 function getRoomByCode(roomCode) {
     return rooms.get(roomCode);
 }
@@ -495,7 +499,10 @@ wss.on("connection", (socket) => {
 
                 socket.send(JSON.stringify({
                     cmd: "room_created",
-                    content: { code: newRoomId }
+                    content: { 
+                        code: newRoomId,
+                        countries_taken: []
+                    }
                 }));
 
                 socket.send(JSON.stringify({
@@ -560,8 +567,11 @@ wss.on("connection", (socket) => {
 
                 socket.send(JSON.stringify({
                     cmd: "room_joined",
-                    content: { code: roomCode }
-                }));
+                    content: { 
+                        code: roomCode,
+                        countries_taken: getCountriesArray(roomToJoin.selectedCountries)
+                    }
+                 }));
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
@@ -615,7 +625,7 @@ wss.on("connection", (socket) => {
                         hostUserId: room.hostUserId,
                         status: room.status,
                         players: getSerializablePlayers(socket.roomId),
-                        selectedCountries: room.selectedCountries,
+                       countries_taken: getCountriesArray(room.selectedCountries),
                         gameState: room.gameState
                     }
                 }));
@@ -716,7 +726,7 @@ wss.on("connection", (socket) => {
                     content: {
                         roomCode: socket.roomId,
                         players: getSerializablePlayers(socket.roomId),
-                        selectedCountries: room.selectedCountries
+                        countries_taken: getCountriesArray(room.selectedCountries),
                     }
                 });
 
@@ -785,11 +795,11 @@ wss.on("connection", (socket) => {
                 broadcastToRoom(room, {
                     cmd: "country_selected",
                     content: {
-                        playerUuid: uuid,
+                        uuid: uuid,
                         playerUserId: player.userId,
                         playerName: player.name,
                         country: countryName,
-                        selectedCountries: room.selectedCountries,
+                        countries_taken: getCountriesArray(room.selectedCountries),
                         players: getSerializablePlayers(socket.roomId)
                     }
                 });
