@@ -742,30 +742,38 @@ wss.on("connection", (socket) => {
                         break;
                     }
 
-                    if (playerCount > 8) {
+                    const everyoneSelected = playersInRoom.every((p) => p.country);
+
+                    if (!everyoneSelected) {
                         socket.send(JSON.stringify({
                             cmd: "error",
-                            content: { msg: "Máximo de 8 jogadores por sala." }
+                            content: { msg: "Todos os jogadores precisam escolher um país antes de iniciar." }
                         }));
                         break;
                     }
 
-                    room.status = "country_selection";
-                    room.selectedCountries = {};
-                    room.gameState = null;
-
-                    for (const player of playersInRoom) {
-                        player.country = null;
-                    }
+                    room.status = "playing";
+                    room.gameState = {
+                        turn: 1,
+                        currentPlayerIndex: 0,
+                        players: playersInRoom.map((p) => ({
+                            uuid: p.uuid,
+                            userId: p.userId,
+                            name: p.name,
+                            country: p.country
+                        }))
+                       };
 
                     broadcastToRoom(room, {
-                        cmd: "country_selection_started",
+                        cmd: "start_game",
                         content: {
-                            roomCode: socket.roomId,
                             players: getSerializablePlayers(socket.roomId),
-                            countries_taken: getCountriesArray(room.selectedCountries)
+                            countries_taken: getCountriesArray(room.selectedCountries),
+                            gameState: room.gameState
                         }
                     });
+
+                    console.log("Jogo iniciado pelo host.");
 
                     saveRoomState(socket.roomId);
                     saveRoomStateToDb(socket.roomId);
@@ -792,7 +800,7 @@ wss.on("connection", (socket) => {
                     console.log("room.status:", room.status);
                     console.log("room.selectedCountries:", room.selectedCountries);
 
-                    if (room.status !== "country_selection") {
+                    if (room.status !== "waiting" && room.status !== "country_selection") {
                         console.log("ERRO: seleção não está ativa");
                         socket.send(JSON.stringify({
                             cmd: "error",
@@ -873,17 +881,23 @@ wss.on("connection", (socket) => {
                     console.log("everyoneSelected:", everyoneSelected);
 
                     if (everyoneSelected) {
-                        room.status = "playing";
-                        room.gameState = {
-                            turn: 1,
-                            currentPlayerIndex: 0,
-                            players: playersInRoom.map((p) => ({
-                                uuid: p.uuid,
-                                userId: p.userId,
-                                name: p.name,
-                                country: p.country
-                            }))
-                        };
+                        room.status = "ready";
+                        
+                        broadcastToRoom(room, {
+                            cmd: "room_state",
+                            content: {
+                                roomCode: socket.roomId,
+                                hostId: room.hostId,
+                                hostUserId: room.hostUserId,
+                                status: room.status,
+                                players: getSerializablePlayers(socket.roomId),
+                                countries_taken: getCountriesArray(room.selectedCountries),
+                                gameState: room.gameState
+                            }
+                        });
+
+                        console.log("Todos escolheram país. Sala pronta para iniciar.");
+                    }
 
                         broadcastToRoom(room, {
                             cmd: "start_game",
