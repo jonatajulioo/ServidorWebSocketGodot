@@ -912,10 +912,9 @@ wss.on("connection", (socket) => {
 
                         saveRoomState(socket.roomId);
                         saveRoomStateToDb(socket.roomId);
-                    }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "save_game": {
                     const room = rooms.get(socket.roomId);
