@@ -43,6 +43,33 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
+function ensureColumnExists(tableName, columnName, columnDefinition) {
+    db.all(`PRAGMA table_info(${tableName})`, [], (err, rows) => {
+        if (err) {
+            console.error(`Erro ao verificar colunas da tabela ${tableName}:`, err.message);
+            return;
+        }
+
+        const exists = rows.some((col) => col.name === columnName);
+
+        if (!exists) {
+            db.run(
+                `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`,
+                (alterErr) => {
+                    if (alterErr) {
+                        console.error(
+                            `Erro ao adicionar coluna ${columnName} em ${tableName}:`,
+                            alterErr.message
+                        );
+                    } else {
+                        console.log(`Coluna ${columnName} adicionada em ${tableName}.`);
+                    }
+                }
+            );
+        }
+    });
+}
+
 function initDatabase() {
     db.serialize(() => {
         db.run(`
@@ -65,7 +92,16 @@ function initDatabase() {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
-        `);
+        `, (err) => {
+            if (err) {
+                console.error("Erro ao criar/verificar tabela saves:", err.message);
+                return;
+            }
+
+            ensureColumnExists("saves", "host_user_id", "INTEGER");
+            ensureColumnExists("saves", "status", "TEXT DEFAULT 'waiting'");
+            ensureColumnExists("saves", "updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP");
+        });
 
         db.run(`PRAGMA journal_mode = WAL;`);
     });
