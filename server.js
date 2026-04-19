@@ -146,8 +146,6 @@ function getSerializablePlayers(roomCode) {
         userId: player.userId,
         room: player.room,
         name: player.name,
-        x: player.x,
-        y: player.y,
         country: player.country || null
     }));
 }
@@ -265,21 +263,11 @@ const playerlist = {
             userId: userId,
             room: roomCode,
             name: playerName,
-            x: isFirstPlayer ? 550 : 700,
-            y: 300,
             country: null
         };
 
         this.players.push(player);
         return player;
-    },
-
-    update(uuid, newX, newY) {
-        const player = this.get(uuid);
-        if (player) {
-            player.x = newX;
-            player.y = newY;
-        }
     },
 
     remove(uuid) {
@@ -525,7 +513,8 @@ wss.on("connection", (socket) => {
                         status: "waiting",
                         selectedCountries: {},
                         gameState: null,
-                        createdAt: Date.now()
+                        createdAt: Date.now(),
+                        chat: []
                     });
 
                     rooms.get(newRoomId).players[uuid] = socket;
@@ -611,6 +600,13 @@ wss.on("connection", (socket) => {
                     }));
 
                     socket.send(JSON.stringify({
+                        cmd: "chat_history",
+                        content: {
+                            messages: roomToJoin.chat || []
+                        }
+                    }));
+
+                    socket.send(JSON.stringify({
                         cmd: "spawn_local_player",
                         content: { player: newPlayer }
                     }));
@@ -669,49 +665,45 @@ wss.on("connection", (socket) => {
                     break;
                 }
 
-                case "position": {
-                    playerlist.update(uuid, data.content.x, data.content.y);
-
-                    const room = rooms.get(socket.roomId);
-                    if (room) {
-                        for (const clientUuid in room.players) {
-                            const client = room.players[clientUuid];
-                            if (client !== socket && client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    cmd: "update_position",
-                                    content: {
-                                        uuid: uuid,
-                                        x: data.content.x,
-                                        y: data.content.y
-                                    }
-                                }));
-                            }
-                        }
-                    }
-                    break;
-                }
-
                 case "chat": {
                     const room = rooms.get(socket.roomId);
-                    if (room) {
-                        for (const clientUuid in room.players) {
-                            const client = room.players[clientUuid];
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(JSON.stringify({
-                                    cmd: "new_chat_message",
-                                    content: {
-                                        uuid: uuid,
-                                        userId: socket.userId,
-                                        username: socket.username,
-                                        msg: data.content.msg
-                                    }
-                                }));
-                            }
-                        }
+
+                    if (!room) {
+                        socket.send(JSON.stringify({
+                            cmd: "error",
+                            content: { msg: "Você não está em uma sala." }
+                        }));
+                        break;
                     }
+
+                    const message = String(data.content?.msg || "").trim();
+
+                    if (!message) {
+                        break;
+                    }
+
+                    const chatData = {
+                        uuid: uuid,
+                        userId: socket.userId,
+                        username: socket.username,
+                        msg: message,
+                        timestamp: Date.now()
+                    };
+
+                    if (!room.chat) {
+                        room.chat = [];
+                    }
+
+                    room.chat.push(chatData);
+
+                    broadcastToRoom(room, {
+                        cmd: "chat_message",
+                        content: chatData
+                    });
+
+                    console.log(`[CHAT ${socket.roomId}] ${socket.username}: ${message}`);
                     break;
                 }
-
                 case "request_start": {
                     const room = rooms.get(socket.roomId);
 
@@ -744,34 +736,24 @@ wss.on("connection", (socket) => {
 
                     const everyoneSelected = playersInRoom.every((p) => p.country);
 
-                    if (!everyoneSelected) {
-                        socket.send(JSON.stringify({
-                            cmd: "error",
-                            content: { msg: "Todos os jogadores precisam escolher um país antes de iniciar." }
-                        }));
-                        break;
+                    if (everyoneSelected) {
+                        room.status = "ready";
+
+                        broadcastToRoom(room, {
+                            cmd: "room_state",
+                            content: {
+                                roomCode: socket.roomId,
+                                hostId: room.hostId,
+                                hostUserId: room.hostUserId,
+                                status: room.status,
+                                players: getSerializablePlayers(socket.roomId),
+                                countries_taken: getCountriesArray(room.selectedCountries),
+                                gameState: room.gameState
+                            }
+                        });
+
+                        console.log("Todos escolheram país. Sala pronta.");
                     }
-
-                    room.status = "playing";
-                    room.gameState = {
-                        turn: 1,
-                        currentPlayerIndex: 0,
-                        players: playersInRoom.map((p) => ({
-                            uuid: p.uuid,
-                            userId: p.userId,
-                            name: p.name,
-                            country: p.country
-                        }))
-                       };
-
-                    broadcastToRoom(room, {
-                        cmd: "start_game",
-                        content: {
-                            players: getSerializablePlayers(socket.roomId),
-                            countries_taken: getCountriesArray(room.selectedCountries),
-                            gameState: room.gameState
-                        }
-                    });
 
                     console.log("Jogo iniciado pelo host.");
 
