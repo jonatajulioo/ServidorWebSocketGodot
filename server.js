@@ -1,9 +1,13 @@
 // ========================
 // Servidor Multiplayer para Godot
+// Fluxo:
+// WaitingRoom -> SelecPais -> SelecCor -> MapaMundi
 // Com:
 // - Registro/Login com SQLite
 // - Salas
 // - Seleção de países
+// - Seleção de cores
+// - Chat
 // - Save JSON
 // - Save SQLite
 // - Sala fecha se o host sair
@@ -113,9 +117,11 @@ initDatabase();
 function generateRoomCode(length = 5) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let result = "";
+
     for (let i = 0; i < length; i++) {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
+
     return result;
 }
 
@@ -123,21 +129,29 @@ function requireAuth(socket) {
     return socket.isAuthenticated && socket.userId !== null;
 }
 
+function send(socket, payload) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(payload));
+    }
+}
+
 function broadcastToRoom(room, payload) {
     for (const clientUuid in room.players) {
         const client = room.players[clientUuid];
-        if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(payload));
-        }
+        send(client, payload);
     }
+}
+
+function getRoomByCode(roomCode) {
+    return rooms.get(roomCode);
 }
 
 function getCountriesArray(selectedCountries) {
     return Object.keys(selectedCountries || {});
 }
 
-function getRoomByCode(roomCode) {
-    return rooms.get(roomCode);
+function getColorsArray(selectedColors) {
+    return Object.keys(selectedColors || {});
 }
 
 function getSerializablePlayers(roomCode) {
@@ -146,8 +160,62 @@ function getSerializablePlayers(roomCode) {
         userId: player.userId,
         room: player.room,
         name: player.name,
-        country: player.country || null
+        country: player.country || null,
+        color: player.color || null
     }));
+}
+
+function buildRoomState(roomCode) {
+    const room = rooms.get(roomCode);
+    if (!room) return null;
+
+    return {
+        roomCode: roomCode,
+        hostId: room.hostId,
+        hostUserId: room.hostUserId,
+        status: room.status,
+        players: getSerializablePlayers(roomCode),
+        countries_taken: getCountriesArray(room.selectedCountries),
+        colors_taken: getColorsArray(room.selectedColors),
+        gameState: room.gameState
+    };
+}
+
+function sendRoomState(socket, roomCode) {
+    const state = buildRoomState(roomCode);
+    if (!state) return;
+
+    send(socket, {
+        cmd: "room_state",
+        content: state
+    });
+}
+
+function broadcastRoomState(roomCode) {
+    const room = rooms.get(roomCode);
+    const state = buildRoomState(roomCode);
+
+    if (!room || !state) return;
+
+    broadcastToRoom(room, {
+        cmd: "room_state",
+        content: state
+    });
+}
+
+function everyoneHasCountry(roomCode) {
+    const players = playerlist.getByRoom(roomCode);
+    return players.length >= 2 && players.every((p) => p.country);
+}
+
+function everyoneHasColor(roomCode) {
+    const players = playerlist.getByRoom(roomCode);
+    return players.length >= 2 && players.every((p) => p.color);
+}
+
+function everyoneReadyForMap(roomCode) {
+    const players = playerlist.getByRoom(roomCode);
+    return players.length >= 2 && players.every((p) => p.country && p.color);
 }
 
 // ========================
@@ -163,7 +231,9 @@ function saveRoomState(roomCode) {
         hostUserId: room.hostUserId,
         status: room.status,
         selectedCountries: room.selectedCountries,
+        selectedColors: room.selectedColors,
         gameState: room.gameState,
+        chat: room.chat || [],
         createdAt: room.createdAt,
         savedAt: Date.now(),
         players: getSerializablePlayers(roomCode)
@@ -187,7 +257,9 @@ function saveRoomStateToDb(roomCode) {
         hostUserId: room.hostUserId,
         status: room.status,
         selectedCountries: room.selectedCountries,
+        selectedColors: room.selectedColors,
         gameState: room.gameState,
+        chat: room.chat || [],
         createdAt: room.createdAt,
         savedAt: Date.now(),
         players: getSerializablePlayers(roomCode)
@@ -255,15 +327,13 @@ const playerlist = {
     },
 
     add(uuid, userId, roomCode, playerName) {
-        const playersInRoom = this.getByRoom(roomCode);
-        const isFirstPlayer = playersInRoom.length === 0;
-
         const player = {
             uuid: uuid,
             userId: userId,
             room: roomCode,
             name: playerName,
-            country: null
+            country: null,
+            color: null
         };
 
         this.players.push(player);
@@ -298,24 +368,25 @@ wss.on("connection", (socket) => {
 
     console.log(`Cliente conectado: ${uuid}`);
 
-    socket.send(JSON.stringify({
+    send(socket, {
         cmd: "joined_server",
         content: { uuid: uuid }
-    }));
+    });
 
     socket.on("message", async (message) => {
         try {
             console.log("Mensagem bruta recebida:", message.toString());
 
             let data;
+
             try {
                 data = JSON.parse(message.toString());
             } catch (err) {
                 console.error("Erro ao parsear mensagem:", err);
-                socket.send(JSON.stringify({
+                send(socket, {
                     cmd: "error",
                     content: { msg: "Mensagem inválida." }
-                }));
+                });
                 return;
             }
 
@@ -323,24 +394,27 @@ wss.on("connection", (socket) => {
             console.log("CONTENT recebido:", data.content);
 
             switch (data.cmd) {
+                // ========================
+                // Registro
+                // ========================
                 case "register": {
                     const username = (data.content?.username || "").trim();
                     const email = (data.content?.email || "").trim().toLowerCase();
                     const password = data.content?.password || "";
 
                     if (!username || !email || !password) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Preencha usuário, email e senha." }
-                        }));
+                        });
                         break;
                     }
 
                     if (password.length < 6) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "A senha deve ter pelo menos 6 caracteres." }
-                        }));
+                        });
                         break;
                     }
 
@@ -350,18 +424,18 @@ wss.on("connection", (socket) => {
                         async (err, row) => {
                             if (err) {
                                 console.error(err);
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "error",
                                     content: { msg: "Erro no banco de dados." }
-                                }));
+                                });
                                 return;
                             }
 
                             if (row) {
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "error",
                                     content: { msg: "Usuário ou email já cadastrado." }
-                                }));
+                                });
                                 return;
                             }
 
@@ -374,44 +448,48 @@ wss.on("connection", (socket) => {
                                     function (err) {
                                         if (err) {
                                             console.error(err);
-                                            socket.send(JSON.stringify({
+                                            send(socket, {
                                                 cmd: "error",
                                                 content: { msg: "Erro ao criar conta." }
-                                            }));
+                                            });
                                             return;
                                         }
 
-                                        socket.send(JSON.stringify({
+                                        send(socket, {
                                             cmd: "register_success",
                                             content: {
                                                 userId: this.lastID,
                                                 username: username,
                                                 email: email
                                             }
-                                        }));
+                                        });
                                     }
                                 );
                             } catch (e) {
                                 console.error(e);
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "error",
                                     content: { msg: "Erro ao processar senha." }
-                                }));
+                                });
                             }
                         }
                     );
+
                     break;
                 }
 
+                // ========================
+                // Login
+                // ========================
                 case "login": {
                     const username = (data.content?.username || "").trim();
                     const password = data.content?.password || "";
 
                     if (!username || !password) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Informe usuário e senha." }
-                        }));
+                        });
                         break;
                     }
 
@@ -421,18 +499,18 @@ wss.on("connection", (socket) => {
                         async (err, user) => {
                             if (err) {
                                 console.error(err);
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "error",
                                     content: { msg: "Erro no banco de dados." }
-                                }));
+                                });
                                 return;
                             }
 
                             if (!user) {
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "error",
                                     content: { msg: "Conta não encontrada." }
-                                }));
+                                });
                                 return;
                             }
 
@@ -440,10 +518,10 @@ wss.on("connection", (socket) => {
                                 const ok = await bcrypt.compare(password, user.password_hash);
 
                                 if (!ok) {
-                                    socket.send(JSON.stringify({
+                                    send(socket, {
                                         cmd: "error",
                                         content: { msg: "Senha incorreta." }
-                                    }));
+                                    });
                                     return;
                                 }
 
@@ -452,57 +530,66 @@ wss.on("connection", (socket) => {
                                 socket.email = user.email;
                                 socket.isAuthenticated = true;
 
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "login_success",
                                     content: {
                                         userId: user.id,
                                         username: user.username,
                                         email: user.email
                                     }
-                                }));
+                                });
                             } catch (e) {
                                 console.error(e);
-                                socket.send(JSON.stringify({
+                                send(socket, {
                                     cmd: "error",
                                     content: { msg: "Erro ao validar login." }
-                                }));
+                                });
                             }
                         }
                     );
+
                     break;
                 }
 
                 case "me": {
                     if (!requireAuth(socket)) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "not_logged_in",
                             content: {}
-                        }));
+                        });
                         break;
                     }
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "me",
                         content: {
                             userId: socket.userId,
                             username: socket.username,
                             email: socket.email
                         }
-                    }));
+                    });
+
                     break;
                 }
 
+                // ========================
+                // Criar sala
+                // ========================
                 case "create_room": {
                     if (!requireAuth(socket)) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Você precisa estar logado para criar uma sala." }
-                        }));
+                        });
                         break;
                     }
 
                     const playerName = socket.username;
-                    const newRoomId = generateRoomCode();
+                    let newRoomId = generateRoomCode();
+
+                    while (rooms.has(newRoomId)) {
+                        newRoomId = generateRoomCode();
+                    }
 
                     socket.roomId = newRoomId;
 
@@ -512,54 +599,50 @@ wss.on("connection", (socket) => {
                         hostUserId: socket.userId,
                         status: "waiting",
                         selectedCountries: {},
+                        selectedColors: {},
                         gameState: null,
                         createdAt: Date.now(),
                         chat: []
                     });
 
-                    rooms.get(newRoomId).players[uuid] = socket;
+                    const room = rooms.get(newRoomId);
+                    room.players[uuid] = socket;
 
                     const newPlayer = playerlist.add(uuid, socket.userId, newRoomId, playerName);
 
                     console.log(`Sala ${newRoomId} criada por ${playerName} (userId ${socket.userId})`);
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "room_created",
                         content: {
                             code: newRoomId,
-                            countries_taken: []
+                            countries_taken: [],
+                            colors_taken: []
                         }
-                    }));
+                    });
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "spawn_local_player",
                         content: { player: newPlayer }
-                    }));
+                    });
 
-                    socket.send(JSON.stringify({
-                        cmd: "room_state",
-                        content: {
-                            roomCode: newRoomId,
-                            hostId: uuid,
-                            hostUserId: socket.userId,
-                            status: "waiting",
-                            players: getSerializablePlayers(newRoomId),
-                            countries_taken: [],
-                            gameState: null
-                        }
-                    }));
+                    sendRoomState(socket, newRoomId);
 
                     saveRoomState(newRoomId);
                     saveRoomStateToDb(newRoomId);
+
                     break;
                 }
 
+                // ========================
+                // Entrar na sala
+                // ========================
                 case "join_room": {
                     if (!requireAuth(socket)) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Você precisa estar logado para entrar em uma sala." }
-                        }));
+                        });
                         break;
                     }
 
@@ -568,19 +651,28 @@ wss.on("connection", (socket) => {
                     const roomToJoin = getRoomByCode(roomCode);
 
                     if (!roomToJoin) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Sala não encontrada." }
-                        }));
+                        });
+                        break;
+                    }
+
+                    if (roomToJoin.status !== "waiting") {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "A partida já foi iniciada." }
+                        });
                         break;
                     }
 
                     const currentPlayers = playerlist.getByRoom(roomCode).length;
+
                     if (currentPlayers >= 8) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "A sala já está cheia. Máximo de 8 jogadores." }
-                        }));
+                        });
                         break;
                     }
 
@@ -591,94 +683,79 @@ wss.on("connection", (socket) => {
 
                     console.log(`Jogador ${playerName} entrou na sala ${roomCode}`);
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "room_joined",
                         content: {
                             code: roomCode,
-                            countries_taken: getCountriesArray(roomToJoin.selectedCountries)
+                            countries_taken: getCountriesArray(roomToJoin.selectedCountries),
+                            colors_taken: getColorsArray(roomToJoin.selectedColors)
                         }
-                    }));
+                    });
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "chat_history",
                         content: {
                             messages: roomToJoin.chat || []
                         }
-                    }));
+                    });
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "spawn_local_player",
                         content: { player: newPlayer }
-                    }));
+                    });
 
                     const roomPlayers = playerlist.getByRoom(roomCode).filter((p) => p.uuid !== uuid);
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "spawn_network_players",
                         content: { players: roomPlayers }
-                    }));
+                    });
 
                     for (const clientUuid in roomToJoin.players) {
                         const client = roomToJoin.players[clientUuid];
+
                         if (client !== socket && client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
+                            send(client, {
                                 cmd: "spawn_new_player",
                                 content: { player: newPlayer }
-                            }));
+                            });
                         }
                     }
 
-                    socket.send(JSON.stringify({
-                        cmd: "room_state",
-                        content: {
-                            roomCode: roomCode,
-                            hostId: roomToJoin.hostId,
-                            hostUserId: roomToJoin.hostUserId,
-                            status: roomToJoin.status,
-                            players: getSerializablePlayers(roomCode),
-                            countries_taken: getCountriesArray(roomToJoin.selectedCountries),
-                            gameState: roomToJoin.gameState
-                        }
-                    }));
+                    sendRoomState(socket, roomCode);
 
                     saveRoomState(roomCode);
                     saveRoomStateToDb(roomCode);
+
                     break;
                 }
 
+                // ========================
+                // Estado da sala
+                // ========================
                 case "get_room_state": {
-                    const room = rooms.get(socket.roomId);
-                    if (!room) break;
-
-                    socket.send(JSON.stringify({
-                        cmd: "room_state",
-                        content: {
-                            roomCode: socket.roomId,
-                            hostId: room.hostId,
-                            hostUserId: room.hostUserId,
-                            status: room.status,
-                            players: getSerializablePlayers(socket.roomId),
-                            countries_taken: getCountriesArray(room.selectedCountries),
-                            gameState: room.gameState
-                        }
-                    }));
+                    if (!socket.roomId) break;
+                    sendRoomState(socket, socket.roomId);
                     break;
                 }
 
+                // ========================
+                // Chat
+                // ========================
                 case "chat": {
                     const room = rooms.get(socket.roomId);
 
                     if (!room) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Você não está em uma sala." }
-                        }));
+                        });
                         break;
                     }
 
-                    const message = String(data.content?.msg || "").trim();
+                    const text = String(data.content?.msg || "").trim();
 
-                    if (!message) {
+                    if (!text) {
                         break;
                     }
 
@@ -686,7 +763,7 @@ wss.on("connection", (socket) => {
                         uuid: uuid,
                         userId: socket.userId,
                         username: socket.username,
-                        msg: message,
+                        msg: text,
                         timestamp: Date.now()
                     };
 
@@ -701,144 +778,133 @@ wss.on("connection", (socket) => {
                         content: chatData
                     });
 
-                    console.log(`[CHAT ${socket.roomId}] ${socket.username}: ${message}`);
+                    saveRoomState(socket.roomId);
+                    saveRoomStateToDb(socket.roomId);
+
+                    console.log(`[CHAT ${socket.roomId}] ${socket.username}: ${text}`);
+
                     break;
                 }
+
+                // ========================
+                // Host inicia seleção
+                // WaitingRoom -> SelecPais
+                // ========================
                 case "request_start": {
                     const room = rooms.get(socket.roomId);
 
                     if (!room) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Sala não encontrada." }
-                        }));
+                        });
                         break;
                     }
 
                     if (room.hostId !== uuid) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Apenas o host pode iniciar." }
-                        }));
+                        });
+                        break;
+                    }
+
+                    if (room.status !== "waiting") {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "A seleção já foi iniciada." }
+                        });
                         break;
                     }
 
                     const playersInRoom = playerlist.getByRoom(socket.roomId);
-                    const playerCount = playersInRoom.length;
 
-                    if (playerCount < 2) {
-                        socket.send(JSON.stringify({
+                    if (playersInRoom.length < 2) {
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Para iniciar precisa de 2 ou mais jogadores." }
-                        }));
+                        });
                         break;
                     }
 
-                    const everyoneSelected = playersInRoom.every((p) => p.country);
+                    room.status = "country_selection";
 
-                    if (everyoneSelected) {
-                        room.status = "ready";
+                    broadcastToRoom(room, {
+                        cmd: "start_game",
+                        content: buildRoomState(socket.roomId)
+                    });
 
-                        broadcastToRoom(room, {
-                            cmd: "room_state",
-                            content: {
-                                roomCode: socket.roomId,
-                                hostId: room.hostId,
-                                hostUserId: room.hostUserId,
-                                status: room.status,
-                                players: getSerializablePlayers(socket.roomId),
-                                countries_taken: getCountriesArray(room.selectedCountries),
-                                gameState: room.gameState
-                            }
-                        });
-
-                        console.log("Todos escolheram país. Sala pronta.");
-                    }
-
-                    console.log("Jogo iniciado pelo host.");
+                    broadcastRoomState(socket.roomId);
 
                     saveRoomState(socket.roomId);
                     saveRoomStateToDb(socket.roomId);
+
+                    console.log(`Host iniciou seleção de país na sala ${socket.roomId}`);
+
                     break;
                 }
 
+                // ========================
+                // Seleção de país
+                // SelecPais -> SelecCor
+                // ========================
                 case "select_country": {
-                    console.log("=== select_country recebido ===");
-                    console.log("socket.uuid:", uuid);
-                    console.log("socket.roomId:", socket.roomId);
-                    console.log("data.content:", data.content);
-
                     const room = rooms.get(socket.roomId);
 
                     if (!room) {
-                        console.log("ERRO: room não encontrada para socket.roomId =", socket.roomId);
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Sala não encontrada." }
-                        }));
+                        });
                         break;
                     }
 
-                    console.log("room.status:", room.status);
-                    console.log("room.selectedCountries:", room.selectedCountries);
-
-                    if (room.status !== "waiting" && room.status !== "country_selection") {
-                        console.log("ERRO: seleção não está ativa");
-                        socket.send(JSON.stringify({
+                    if (room.status !== "country_selection" && room.status !== "color_selection") {
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "A seleção de países não está ativa." }
-                        }));
+                        });
                         break;
                     }
 
                     const countryName = String(data.content?.country || "").trim();
-                    console.log("countryName:", countryName);
 
                     if (!countryName) {
-                        console.log("ERRO: countryName vazio");
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "País inválido." }
-                        }));
+                        });
                         break;
                     }
 
                     const player = playerlist.get(uuid);
-                    console.log("player encontrado:", player);
 
                     if (!player) {
-                        console.log("ERRO: player não encontrado para uuid =", uuid);
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Jogador não encontrado." }
-                        }));
+                        });
                         break;
                     }
 
                     if (player.country) {
-                        console.log("ERRO: jogador já tem país:", player.country);
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Você já escolheu um país." }
-                        }));
+                        });
                         break;
                     }
 
                     if (room.selectedCountries[countryName]) {
-                        console.log("ERRO: país já escolhido:", countryName);
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Esse país já foi escolhido." }
-                        }));
+                        });
                         break;
                     }
 
                     player.country = countryName;
                     room.selectedCountries[countryName] = uuid;
-
-                    console.log("País atribuído com sucesso");
-                    console.log("player atualizado:", player);
-                    console.log("selectedCountries atualizado:", room.selectedCountries);
 
                     broadcastToRoom(room, {
                         cmd: "country_selected",
@@ -847,65 +913,156 @@ wss.on("connection", (socket) => {
                             playerName: player.name,
                             country: countryName,
                             countries_taken: getCountriesArray(room.selectedCountries),
+                            colors_taken: getColorsArray(room.selectedColors),
                             players: getSerializablePlayers(socket.roomId)
                         }
                     });
 
-                    console.log("Broadcast de country_selected enviado");
+                    if (everyoneHasCountry(socket.roomId)) {
+                        room.status = "color_selection";
+
+                        broadcastToRoom(room, {
+                            cmd: "country_selection_finished",
+                            content: buildRoomState(socket.roomId)
+                        });
+
+                        console.log(`Todos escolheram país na sala ${socket.roomId}. Indo para seleção de cor.`);
+                    }
+
+                    broadcastRoomState(socket.roomId);
 
                     saveRoomState(socket.roomId);
                     saveRoomStateToDb(socket.roomId);
 
-                    const playersInRoom = playerlist.getByRoom(socket.roomId);
-                    const everyoneSelected = playersInRoom.length >= 2 && playersInRoom.every((p) => p.country);
+                    break;
+                }
 
-                    console.log("playersInRoom:", playersInRoom);
-                    console.log("everyoneSelected:", everyoneSelected);
+                // ========================
+                // Seleção de cor
+                // SelecCor -> MapaMundi
+                // ========================
+                case "select_color": {
+                    const room = rooms.get(socket.roomId);
 
-                    if (everyoneSelected) {
-                        room.status = "ready";
-                        
-                        broadcastToRoom(room, {
-                            cmd: "room_state",
-                            content: {
-                                roomCode: socket.roomId,
-                                hostId: room.hostId,
-                                hostUserId: room.hostUserId,
-                                status: room.status,
-                                players: getSerializablePlayers(socket.roomId),
-                                countries_taken: getCountriesArray(room.selectedCountries),
-                                gameState: room.gameState
-                            }
+                    if (!room) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Sala não encontrada." }
                         });
-
-                        console.log("Todos escolheram país. Sala pronta para iniciar.");
-                    }
-
-                        broadcastToRoom(room, {
-                            cmd: "start_game",
-                            content: {
-                                players: getSerializablePlayers(socket.roomId),
-                                countries_taken: getCountriesArray(room.selectedCountries),
-                                gameState: room.gameState
-                            }
-                        });
-
-                        console.log("Todos escolheram. start_game enviado.");
-
-                        saveRoomState(socket.roomId);
-                        saveRoomStateToDb(socket.roomId);
-
                         break;
                     }
 
+                    if (room.status !== "country_selection" && room.status !== "color_selection") {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "A seleção de cores não está ativa." }
+                        });
+                        break;
+                    }
+
+                    const colorName = String(data.content?.color || "").trim();
+
+                    if (!colorName) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Cor inválida." }
+                        });
+                        break;
+                    }
+
+                    const player = playerlist.get(uuid);
+
+                    if (!player) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Jogador não encontrado." }
+                        });
+                        break;
+                    }
+
+                    if (!player.country) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Escolha um país antes da cor." }
+                        });
+                        break;
+                    }
+
+                    if (player.color) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Você já escolheu uma cor." }
+                        });
+                        break;
+                    }
+
+                    if (room.selectedColors[colorName]) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Essa cor já foi escolhida." }
+                        });
+                        break;
+                    }
+
+                    player.color = colorName;
+                    room.selectedColors[colorName] = uuid;
+
+                    broadcastToRoom(room, {
+                        cmd: "color_selected",
+                        content: {
+                            uuid: uuid,
+                            playerName: player.name,
+                            color: colorName,
+                            countries_taken: getCountriesArray(room.selectedCountries),
+                            colors_taken: getColorsArray(room.selectedColors),
+                            players: getSerializablePlayers(socket.roomId)
+                        }
+                    });
+
+                    if (everyoneHasColor(socket.roomId) && everyoneReadyForMap(socket.roomId)) {
+                        room.status = "playing";
+
+                        const playersInRoom = playerlist.getByRoom(socket.roomId);
+
+                        room.gameState = {
+                            turn: 1,
+                            currentPlayerIndex: 0,
+                            players: playersInRoom.map((p) => ({
+                                uuid: p.uuid,
+                                userId: p.userId,
+                                name: p.name,
+                                country: p.country,
+                                color: p.color
+                            }))
+                        };
+
+                        broadcastToRoom(room, {
+                            cmd: "go_to_map",
+                            content: buildRoomState(socket.roomId)
+                        });
+
+                        console.log(`Todos escolheram país e cor. Indo para MapaMundi na sala ${socket.roomId}.`);
+                    }
+
+                    broadcastRoomState(socket.roomId);
+
+                    saveRoomState(socket.roomId);
+                    saveRoomStateToDb(socket.roomId);
+
+                    break;
+                }
+
+                // ========================
+                // Salvar jogo
+                // ========================
                 case "save_game": {
                     const room = rooms.get(socket.roomId);
 
                     if (!room) {
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "error",
                             content: { msg: "Sala não encontrada." }
-                        }));
+                        });
                         break;
                     }
 
@@ -916,58 +1073,63 @@ wss.on("connection", (socket) => {
                     saveRoomState(socket.roomId);
                     saveRoomStateToDb(socket.roomId);
 
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "game_saved",
                         content: { roomCode: socket.roomId }
-                    }));
+                    });
+
                     break;
                 }
 
+                // ========================
+                // Carregar save
+                // ========================
                 case "load_game": {
                     const roomCode = (data.content?.code || "").trim().toUpperCase();
 
                     loadRoomStateFromDb(roomCode, (err, savedRoom) => {
                         if (err) {
                             console.error(err);
-                            socket.send(JSON.stringify({
+                            send(socket, {
                                 cmd: "error",
                                 content: { msg: "Erro ao carregar save." }
-                            }));
+                            });
                             return;
                         }
 
                         if (!savedRoom) {
-                            socket.send(JSON.stringify({
+                            send(socket, {
                                 cmd: "error",
                                 content: { msg: "Save não encontrado." }
-                            }));
+                            });
                             return;
                         }
 
-                        socket.send(JSON.stringify({
+                        send(socket, {
                             cmd: "loaded_game_data",
                             content: savedRoom
-                        }));
+                        });
                     });
 
                     break;
                 }
 
                 default: {
-                    socket.send(JSON.stringify({
+                    send(socket, {
                         cmd: "error",
                         content: { msg: `Comando desconhecido: ${data.cmd}` }
-                    }));
+                    });
                     break;
                 }
             }
         } catch (err) {
             console.error("ERRO GERAL no socket.on(message):", err);
+
             try {
-                socket.send(JSON.stringify({
+                send(socket, {
                     cmd: "error",
                     content: { msg: "Erro interno no servidor." }
-                }));
+                });
             } catch (_) {}
         }
     });
@@ -987,13 +1149,14 @@ wss.on("connection", (socket) => {
 
                 for (const clientUuid in room.players) {
                     const client = room.players[clientUuid];
+
                     if (client && client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify({
+                        send(client, {
                             cmd: "room_closed",
                             content: {
                                 msg: "A sala foi encerrada porque o host saiu."
                             }
-                        }));
+                        });
                     }
                 }
 
@@ -1007,34 +1170,29 @@ wss.on("connection", (socket) => {
             delete room.players[uuid];
 
             const player = playerlist.get(uuid);
+
             if (player && player.country && room.selectedCountries[player.country] === uuid) {
                 delete room.selectedCountries[player.country];
+            }
+
+            if (player && player.color && room.selectedColors[player.color] === uuid) {
+                delete room.selectedColors[player.color];
             }
 
             playerlist.remove(uuid);
 
             for (const clientUuid in room.players) {
                 const client = room.players[clientUuid];
+
                 if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
+                    send(client, {
                         cmd: "player_disconnected",
                         content: { uuid: uuid }
-                    }));
-
-                    client.send(JSON.stringify({
-                        cmd: "room_state",
-                        content: {
-                            roomCode: roomCode,
-                            hostId: room.hostId,
-                            hostUserId: room.hostUserId,
-                            status: room.status,
-                            players: getSerializablePlayers(roomCode),
-                            countries_taken: getCountriesArray(room.selectedCountries),
-                            gameState: room.gameState
-                        }
-                    }));
+                    });
                 }
             }
+
+            broadcastRoomState(roomCode);
 
             saveRoomState(roomCode);
             saveRoomStateToDb(roomCode);
