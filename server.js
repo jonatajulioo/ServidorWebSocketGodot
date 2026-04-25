@@ -1025,16 +1025,27 @@ wss.on("connection", (socket) => {
                         const playersInRoom = playerlist.getByRoom(socket.roomId);
 
                         room.gameState = {
-                            turn: 1,
-                            currentPlayerIndex: 0,
+                            phase: "playing",
                             players: playersInRoom.map((p) => ({
-                                uuid: p.uuid,
-                                userId: p.userId,
-                                name: p.name,
-                                country: p.country,
-                                color: p.color
-                            }))
+                            uuid: p.uuid,
+                            name: p.name,
+                            country: p.country,
+                            color: p.color
+                            })),
+                            playerStats: {}
                         };
+
+                        for (const p of playersInRoom) {
+                            room.gameState.playerStats[p.uuid] = {
+                                infantry: {
+                                    guarnicoes: 0,
+                                    armamentos: 0,
+                                    estrutura: 0
+                                },
+                                money: 100,
+                                population: 1000
+                            };
+                        }
 
                         broadcastToRoom(room, {
                             cmd: "go_to_map",
@@ -1111,6 +1122,38 @@ wss.on("connection", (socket) => {
                         });
                     });
 
+                    break;
+                }
+
+                case "upgrade_infantry": {
+                    const room = rooms.get(socket.roomId);
+                    if (!room || !room.gameState) break;
+
+                    const upgradeType = String(data.content?.type || "");
+
+                    const allowed = ["guarnicoes", "armamentos", "estrutura"];
+                    if (!allowed.includes(upgradeType)) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Tipo de upgrade inválido." }
+                        });
+                        break;
+                    }
+
+                    const stats = room.gameState.playerStats[uuid];
+                    if (!stats) break;
+
+                    stats.infantry[upgradeType] += 1;
+
+                    broadcastToRoom(room, {
+                        cmd: "game_state_updated",
+                        content: {
+                            gameState: room.gameState
+                        }
+                    });
+
+                    saveRoomState(socket.roomId);
+                    saveRoomStateToDb(socket.roomId);
                     break;
                 }
 
