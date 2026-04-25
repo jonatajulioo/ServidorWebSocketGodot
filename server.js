@@ -1127,11 +1127,19 @@ wss.on("connection", (socket) => {
 
                 case "upgrade_infantry": {
                     const room = rooms.get(socket.roomId);
-                    if (!room || !room.gameState) break;
+
+                    if (!room || !room.gameState) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Jogo não iniciado." }
+                        });
+                        break;
+                    }
 
                     const upgradeType = String(data.content?.type || "");
 
                     const allowed = ["guarnicoes", "armamentos", "estrutura"];
+
                     if (!allowed.includes(upgradeType)) {
                         send(socket, {
                             cmd: "error",
@@ -1139,21 +1147,47 @@ wss.on("connection", (socket) => {
                         });
                         break;
                     }
+                
+                    if (!room.gameState.playerStats) {
+                        room.gameState.playerStats = {};
+                    }
+                
+                    if (!room.gameState.playerStats[uuid]) {
+                        room.gameState.playerStats[uuid] = {
+                            infantry: {
+                                guarnicoes: 0,
+                                armamentos: 0,
+                                estrutura: 0
+                            },
+                            money: 100,
+                            population: 1000
+                        };
+                    }
 
                     const stats = room.gameState.playerStats[uuid];
-                    if (!stats) break;
-
+                                
+                    if (!stats.infantry) {
+                        stats.infantry = {
+                            guarnicoes: 0,
+                            armamentos: 0,
+                            estrutura: 0
+                        };
+                    }
+                
                     stats.infantry[upgradeType] += 1;
-
+                
                     broadcastToRoom(room, {
                         cmd: "game_state_updated",
                         content: {
                             gameState: room.gameState
                         }
                     });
-
+                
                     saveRoomState(socket.roomId);
                     saveRoomStateToDb(socket.roomId);
+                
+                    console.log(`${socket.username} melhorou infantaria: ${upgradeType}`);
+                
                     break;
                 }
 
