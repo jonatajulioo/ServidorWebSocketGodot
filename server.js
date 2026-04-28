@@ -1165,30 +1165,25 @@ wss.on("connection", (socket) => {
                     }
 
                     const stats = room.gameState.playerStats[uuid];
-                                
-                    if (!stats.infantry) {
-                        stats.infantry = {
-                            guarnicoes: 0,
-                            armamentos: 0,
-                            estrutura: 0
-                        };
+
+                    const currentLevel = stats.infantry[upgradeType];
+
+                    // custo cresce com o nível
+                    const cost = (currentLevel + 1) * 100;
+
+                    if (stats.money < cost) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Dinheiro insuficiente." }
+                        });
+                        break;
                     }
-                
+
+                    // paga
+                    stats.money -= cost;
+
+                    // upa
                     stats.infantry[upgradeType] += 1;
-                
-                    broadcastToRoom(room, {
-                        cmd: "game_state_updated",
-                        content: {
-                            gameState: room.gameState
-                        }
-                    });
-                
-                    saveRoomState(socket.roomId);
-                    saveRoomStateToDb(socket.roomId);
-                
-                    console.log(`${socket.username} melhorou infantaria: ${upgradeType}`);
-                
-                    break;
                 }
 
                 default: {
