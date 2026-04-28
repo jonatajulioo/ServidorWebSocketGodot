@@ -1042,7 +1042,7 @@ wss.on("connection", (socket) => {
                                     armamentos: 0,
                                     estrutura: 0
                                 },
-                                money: 100,
+                                money: 1000,
                                 population: 1000
                             };
                         }
