@@ -206,9 +206,9 @@ function saveRoomState(roomCode) {
 }
 
 // ========================
-// Save no SQLite
+// Save no Banco de Dados
 // ========================
-function saveRoomStateToDb(roomCode) {
+async function saveRoomStateToDb(roomCode) {
     const room = rooms.get(roomCode);
     if (!room) return;
 
@@ -228,15 +228,21 @@ function saveRoomStateToDb(roomCode) {
 
     const json = JSON.stringify(saveData);
 
-    await db.query(`
-        INSERT INTO saves (room_code, host_user_id, save_data, status, updated_at)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-        ON CONFLICT (room_code) DO UPDATE SET
-            host_user_id = EXCLUDED.host_user_id,
-            save_data = EXCLUDED.save_data,
-            status = EXCLUDED.status,
-            updated_at = CURRENT_TIMESTAMP
-    `, [roomCode, room.hostUserId || null, json, room.status]);
+    try {
+        await db.query(`
+            INSERT INTO saves (room_code, host_user_id, save_data, status, updated_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            ON CONFLICT (room_code) DO UPDATE SET
+                host_user_id = EXCLUDED.host_user_id,
+                save_data = EXCLUDED.save_data,
+                status = EXCLUDED.status,
+                updated_at = CURRENT_TIMESTAMP
+        `, [roomCode, room.hostUserId || null, json, room.status]);
+
+        console.log(`Sala ${roomCode} salva no PostgreSQL.`);
+    } catch (err) {
+        console.error(`Erro ao salvar sala ${roomCode} no PostgreSQL:`, err.message);
+    }
 }
 
 function loadRoomStateFromDb(roomCode, callback) {
