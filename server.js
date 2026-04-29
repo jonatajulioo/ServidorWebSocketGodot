@@ -31,6 +31,7 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 
 const wss = new WebSocket.Server({ server });
 const rooms = new Map();
+const activeUsers = new Map();
 
 const SAVE_DIR = path.join(__dirname, "saves");
 if (!fs.existsSync(SAVE_DIR)) {
@@ -426,10 +427,24 @@ wss.on("connection", (socket) => {
                         break;
                     }
 
+                    const alreadyConnected = activeUsers.get(user.id);
+
+                    if (alreadyConnected && alreadyConnected.readyState === WebSocket.OPEN) {
+                        send(socket, {
+                            cmd: "error",
+                            content: {
+                                msg: "Essa conta já está conectada em outro dispositivo."
+                            }
+                        });
+                        break;
+                    }
+
                     socket.userId = user.id;
                     socket.username = user.username;
                     socket.email = user.email;
                     socket.isAuthenticated = true;
+
+                    activeUsers.set(user.id, socket);
 
                     send(socket, {
                         cmd: "login_success",
@@ -562,15 +577,29 @@ wss.on("connection", (socket) => {
                         break;
                     }
 
-                    if (roomToJoin.status !== "waiting") {
-                        send(socket, {
-                            cmd: "error",
-                            content: { msg: "A partida já foi iniciada." }
-                        });
-                        break;
+                    if (roomToJoin.status === "offline") {
+                        roomToJoin.online = true;
+
+                        if (!roomToJoin.statusBeforeOffline) {
+                            roomToJoin.status = "waiting";
+                        } else {
+                            roomToJoin.status = roomToJoin.statusBeforeOffline;
+                        }
                     }
 
                     const currentPlayers = playerlist.getByRoom(roomCode).length;
+
+                    if (remainingPlayers.length === 0) {
+                        room.online = false;
+                        room.statusBeforeOffline = room.status;
+                        room.status = "offline";
+
+                        saveRoomState(roomCode);
+                        saveRoomStateToDb(roomCode);
+
+                        console.log(`Sala ${roomCode} ficou vazia e está offline.`);
+                        return;
+                    }
 
                     if (currentPlayers >= 8) {
                         send(socket, {
@@ -1131,6 +1160,10 @@ wss.on("connection", (socket) => {
     });
 
     socket.on("close", () => {
+        if (socket.userId && activeUsers.get(socket.userId) === socket) {
+            activeUsers.delete(socket.userId);
+        
+        }
         console.log(`Cliente desconectado: ${uuid}`);
 
         const roomCode = socket.roomId;
