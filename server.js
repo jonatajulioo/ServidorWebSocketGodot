@@ -22,9 +22,33 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 
 const wss = new WebSocket.Server({ server });
 
-wss.on("connection", (socket) => {
-    const uuid = randomUUID();
+const HEARTBEAT_INTERVAL = 30000;
 
+function heartbeat() {
+    this.isAlive = true;
+}
+
+const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((socket) => {
+        if (socket.isAlive === false) {
+            console.log(`Socket morto encerrado: ${socket.username || socket.uuid}`);
+            return socket.terminate();
+        }
+
+        socket.isAlive = false;
+        socket.ping();
+    });
+}, HEARTBEAT_INTERVAL);
+
+wss.on("close", () => {
+    clearInterval(heartbeatInterval);
+});
+
+wss.on("connection", (socket) => {
+    socket.isAlive = true;
+    socket.on("pong", heartbeat);
+
+    const uuid = randomUUID();
     socket.uuid = uuid;
     socket.roomId = null;
     socket.userId = null;
