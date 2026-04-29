@@ -589,16 +589,9 @@ wss.on("connection", (socket) => {
 
                     const currentPlayers = playerlist.getByRoom(roomCode).length;
 
-                    if (remainingPlayers.length === 0) {
-                        room.online = false;
-                        room.statusBeforeOffline = room.status;
-                        room.status = "offline";
-
-                        saveRoomState(roomCode);
-                        saveRoomStateToDb(roomCode);
-
-                        console.log(`Sala ${roomCode} ficou vazia e está offline.`);
-                        return;
+                    if (roomToJoin.status === "offline") {
+                        roomToJoin.online = true;
+                        roomToJoin.status = roomToJoin.statusBeforeOffline || "waiting";
                     }
 
                     if (currentPlayers >= 8) {
@@ -1189,6 +1182,20 @@ wss.on("connection", (socket) => {
             }
 
             playerlist.remove(uuid);
+
+            const remainingPlayers = playerlist.getByRoom(roomCode);
+
+            if (remainingPlayers.length === 0) {
+                room.online = false;
+                room.statusBeforeOffline = room.status;
+                room.status = "offline";
+
+                saveRoomState(roomCode);
+                saveRoomStateToDb(roomCode);
+
+                console.log(`Sala ${roomCode} ficou vazia e está offline.`);
+                return;
+            }
 
             for (const clientUuid in room.players) {
                 const client = room.players[clientUuid];
