@@ -650,6 +650,13 @@ wss.on("connection", (socket) => {
 
                     sendRoomState(socket, roomCode);
 
+                    if (roomToJoin.status === "playing") {
+                        send(socket, {
+                            cmd: "go_to_map",
+                            content: buildRoomState(roomCode)
+                        });
+                    }
+
                     saveRoomState(roomCode);
                     saveRoomStateToDb(roomCode);
 
