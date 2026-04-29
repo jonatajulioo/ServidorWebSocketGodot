@@ -12,7 +12,7 @@ const playerlist = {
     getByUserId(userId) {
         return this.players.find((player) => player.userId === userId);
     },
-    
+
     getByUserIdAndRoom(userId, roomCode) {
         return this.players.find(
             (player) => player.userId === userId && player.room === roomCode
@@ -43,7 +43,27 @@ const playerlist = {
 
     getByRoom(roomCode) {
         return this.players.filter((player) => player.room === roomCode);
-    }
+    },
+    
+    addExisting(playerData) {
+    if (!playerData || !playerData.uuid) return null;
+
+    const exists = this.players.find((p) => p.uuid === playerData.uuid);
+    if (exists) return exists;
+
+    const player = {
+        uuid: playerData.uuid,
+        userId: playerData.userId,
+        room: playerData.room,
+        name: playerData.name,
+        country: playerData.country || null,
+        color: playerData.color || null,
+        offline: true
+    };
+
+    this.players.push(player);
+    return player;
+},
 };
 
 module.exports = playerlist;

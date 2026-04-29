@@ -10,7 +10,11 @@ const rooms = require("./rooms");
 const app = express();
 const PORT = process.env.PORT || 9090;
 
-initDatabase();
+initDatabase()
+    .then(() => rooms.loadRoomsFromDb())
+    .catch((err) => {
+        console.error("Erro ao iniciar banco/salas:", err);
+    });
 
 const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Servidor iniciado na porta: ${PORT}`);
