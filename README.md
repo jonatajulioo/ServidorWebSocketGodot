@@ -62,4 +62,4 @@ O Render.com oferece um plano gratuito ideal para hospedar este tipo de servidor
 Este projeto é distribuído sob a licença MIT.
 
 ---
-*Criado por Zee GameDev*
+*Criado por Zee GameDev e Configurado para o SWW por jottadev*
