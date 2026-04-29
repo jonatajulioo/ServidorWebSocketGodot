@@ -1,8 +1,16 @@
 const playerlist = {
     players: [],
 
+    getAll() {
+        return this.players;
+    },
+
     get(uuid) {
-        return this.players.find((p) => p.uuid === uuid);
+        return this.players.find((player) => player.uuid === uuid);
+    },
+
+    getByUserId(userId) {
+        return this.players.find((player) => player.userId === userId);
     },
 
     add(uuid, userId, roomCode, playerName) {
@@ -20,15 +28,15 @@ const playerlist = {
     },
 
     remove(uuid) {
-        this.players = this.players.filter((p) => p.uuid !== uuid);
+        this.players = this.players.filter((player) => player.uuid !== uuid);
     },
 
     removeByRoom(roomCode) {
-        this.players = this.players.filter((p) => p.room !== roomCode);
+        this.players = this.players.filter((player) => player.room !== roomCode);
     },
 
     getByRoom(roomCode) {
-        return this.players.filter((p) => p.room === roomCode);
+        return this.players.filter((player) => player.room === roomCode);
     }
 };
 

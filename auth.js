@@ -1,4 +1,5 @@
 const bcrypt = require("bcrypt");
+const WebSocket = require("ws");
 const { db } = require("./database");
 const { send } = require("./utils");
 
@@ -57,6 +58,7 @@ async function login(socket, content) {
     }
 
     const user = res.rows[0];
+
     const ok = await bcrypt.compare(password, user.password_hash);
 
     if (!ok) {
@@ -69,7 +71,7 @@ async function login(socket, content) {
 
     const alreadyConnected = activeUsers.get(user.id);
 
-    if (alreadyConnected && alreadyConnected.readyState === 1) {
+    if (alreadyConnected && alreadyConnected.readyState === WebSocket.OPEN) {
         send(socket, {
             cmd: "error",
             content: { msg: "Essa conta já está conectada em outro dispositivo." }

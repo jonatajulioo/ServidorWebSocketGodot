@@ -27,11 +27,13 @@ async function initDatabase() {
             room_code VARCHAR(5) UNIQUE NOT NULL,
             host_user_id INTEGER,
             save_data TEXT NOT NULL,
-            status VARCHAR(20) DEFAULT 'waiting'
+            status VARCHAR(20) DEFAULT 'waiting',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     `);
 
-    console.log("Banco pronto");
+    console.log("PostgreSQL pronto");
 }
 
 module.exports = { db, initDatabase };
