@@ -282,9 +282,10 @@ function joinRoom(socket, content) {
         roomToJoin.status = roomToJoin.statusBeforeOffline || "waiting";
     }
 
+    const oldPlayer = playerlist.getByUserIdAndRoom(socket.userId, roomCode);
     const currentPlayers = playerlist.getByRoom(roomCode).length;
 
-    if (currentPlayers >= 8) {
+    if (!oldPlayer && currentPlayers >= 8) {
         send(socket, {
             cmd: "error",
             content: { msg: "A sala já está cheia. Máximo de 8 jogadores." }
@@ -294,12 +295,12 @@ function joinRoom(socket, content) {
 
     let newPlayer = null;
 
-    const oldPlayer = playerlist.getByUserIdAndRoom(socket.userId, roomCode);
-
     if (oldPlayer) {
         console.log(`Reconectando ${playerName} na sala ${roomCode}`);
 
-        delete roomToJoin.players[oldPlayer.uuid];
+        const oldUuid = oldPlayer.uuid;
+
+        delete roomToJoin.players[oldUuid];
 
         oldPlayer.uuid = socket.uuid;
         oldPlayer.offline = false;
@@ -309,22 +310,31 @@ function joinRoom(socket, content) {
 
         newPlayer = oldPlayer;
 
-        if (roomToJoin.gameState?.playerStats?.[oldPlayer.uuid]) {  
-            roomToJoin.gameState.playerStats[socket.uuid] = roomToJoin.gameState.playerStats[oldPlayer.uuid];
-            delete roomToJoin.gameState.playerStats[oldPlayer.uuid];
+        if (roomToJoin.gameState?.playerStats?.[oldUuid]) {
+            roomToJoin.gameState.playerStats[socket.uuid] = roomToJoin.gameState.playerStats[oldUuid];
+            delete roomToJoin.gameState.playerStats[oldUuid];
         }
 
         if (oldPlayer.country) {
+            delete roomToJoin.selectedCountries[oldPlayer.country];
             roomToJoin.selectedCountries[oldPlayer.country] = socket.uuid;
         }
 
         if (oldPlayer.color) {
-        roomToJoin.selectedColors[oldPlayer.color] = socket.uuid;
+            delete roomToJoin.selectedColors[oldPlayer.color];
+            roomToJoin.selectedColors[oldPlayer.color] = socket.uuid;
+        }
+
+        if (roomToJoin.gameState?.players) {
+            const gsPlayer = roomToJoin.gameState.players.find((p) => p.uuid === oldUuid);
+            if (gsPlayer) {
+                gsPlayer.uuid = socket.uuid;
+            }
         }
     } else {
-    socket.roomId = roomCode;
-    roomToJoin.players[socket.uuid] = socket;
-    newPlayer = playerlist.add(socket.uuid, socket.userId, roomCode, playerName);
+        socket.roomId = roomCode;
+        roomToJoin.players[socket.uuid] = socket;
+        newPlayer = playerlist.add(socket.uuid, socket.userId, roomCode, playerName);
     }
 
     send(socket, {
@@ -360,7 +370,7 @@ function joinRoom(socket, content) {
 
         if (client !== socket) {
             send(client, {
-                cmd: "spawn_new_player",
+                cmd: oldPlayer ? "player_reconnected" : "spawn_new_player",
                 content: { player: newPlayer }
             });
         }
@@ -369,6 +379,28 @@ function joinRoom(socket, content) {
     sendRoomState(socket, roomCode);
 
     if (roomToJoin.status === "playing") {
+        if (!newPlayer.country) {
+            send(socket, {
+                cmd: "late_select_country",
+                content: buildRoomState(roomCode)
+            });
+
+            saveRoomState(roomCode);
+            saveRoomStateToDb(roomCode);
+            return;
+        }
+
+        if (!newPlayer.color) {
+            send(socket, {
+                cmd: "late_select_color",
+                content: buildRoomState(roomCode)
+            });
+
+            saveRoomState(roomCode);
+            saveRoomStateToDb(roomCode);
+            return;
+        }
+
         send(socket, {
             cmd: "go_to_map",
             content: buildRoomState(roomCode)
@@ -378,7 +410,6 @@ function joinRoom(socket, content) {
     saveRoomState(roomCode);
     saveRoomStateToDb(roomCode);
 }
-
 function chat(socket, content) {
     const room = rooms.get(socket.roomId);
 
