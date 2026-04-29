@@ -476,6 +476,18 @@ wss.on("connection", (socket) => {
                         break;
                     }
 
+                    const salasDoUsuario = Array.from(rooms.values()).filter(
+                        (room) => room.hostUserId === socket.userId
+                    ).length;
+
+                    if (salasDoUsuario >= 3) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Você só pode criar no máximo 3 salas." }
+                        });
+                        break;
+                    }
+
                     const playerName = socket.username;
                     let newRoomId = generateRoomCode();
 
@@ -1128,27 +1140,7 @@ wss.on("connection", (socket) => {
             const isHost = room.hostId === uuid;
 
             if (isHost) {
-                saveRoomState(roomCode);
-                saveRoomStateToDb(roomCode);
-
-                for (const clientUuid in room.players) {
-                    const client = room.players[clientUuid];
-
-                    if (client && client.readyState === WebSocket.OPEN) {
-                        send(client, {
-                            cmd: "room_closed",
-                            content: {
-                                msg: "A sala foi encerrada porque o host saiu."
-                            }
-                        });
-                    }
-                }
-
-                playerlist.removeByRoom(roomCode);
-                rooms.delete(roomCode);
-
-                console.log(`Sala ${roomCode} encerrada porque o host saiu.`);
-                return;
+                console.log(`Host saiu da sala ${roomCode}, mas a sala continuará existindo.`);
             }
 
             delete room.players[uuid];
@@ -1176,12 +1168,25 @@ wss.on("connection", (socket) => {
                 }
             }
 
+            const remainingPlayers = playerlist.getByRoom(roomCode);
+
+            if (remainingPlayers.length === 0) {
+                room.status = "offline";
+                room.online = false;
+
+                saveRoomState(roomCode);
+                saveRoomStateToDb(roomCode);
+
+                console.log(`Sala ${roomCode} ficou vazia e está offline.`);
+                return;
+            }
+
+            room.online = true;
+
             broadcastRoomState(roomCode);
 
             saveRoomState(roomCode);
             saveRoomStateToDb(roomCode);
-        } else {
-            playerlist.remove(uuid);
         }
     });
 });
