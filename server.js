@@ -1207,20 +1207,6 @@ wss.on("connection", (socket) => {
                     });
                 }
             }
-
-            const remainingPlayers = playerlist.getByRoom(roomCode);
-
-            if (remainingPlayers.length === 0) {
-                room.status = "offline";
-                room.online = false;
-
-                saveRoomState(roomCode);
-                saveRoomStateToDb(roomCode);
-
-                console.log(`Sala ${roomCode} ficou vazia e está offline.`);
-                return;
-            }
-
             room.online = true;
 
             broadcastRoomState(roomCode);
