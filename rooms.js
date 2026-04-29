@@ -292,10 +292,40 @@ function joinRoom(socket, content) {
         return;
     }
 
+    let newPlayer = null;
+
+    const oldPlayer = playerlist.getByUserIdAndRoom(socket.userId, roomCode);
+
+    if (oldPlayer) {
+        console.log(`Reconectando ${playerName} na sala ${roomCode}`);
+
+        delete roomToJoin.players[oldPlayer.uuid];
+
+        oldPlayer.uuid = socket.uuid;
+        oldPlayer.offline = false;
+
+        socket.roomId = roomCode;
+        roomToJoin.players[socket.uuid] = socket;
+
+        newPlayer = oldPlayer;
+
+        if (roomToJoin.gameState?.playerStats?.[oldPlayer.uuid]) {  
+            roomToJoin.gameState.playerStats[socket.uuid] = roomToJoin.gameState.playerStats[oldPlayer.uuid];
+            delete roomToJoin.gameState.playerStats[oldPlayer.uuid];
+        }
+
+        if (oldPlayer.country) {
+            roomToJoin.selectedCountries[oldPlayer.country] = socket.uuid;
+        }
+
+        if (oldPlayer.color) {
+        roomToJoin.selectedColors[oldPlayer.color] = socket.uuid;
+        }
+    } else {
     socket.roomId = roomCode;
     roomToJoin.players[socket.uuid] = socket;
-
-    const newPlayer = playerlist.add(socket.uuid, socket.userId, roomCode, playerName);
+    newPlayer = playerlist.add(socket.uuid, socket.userId, roomCode, playerName);
+    }
 
     send(socket, {
         cmd: "room_joined",
@@ -787,15 +817,24 @@ function handleDisconnect(socket) {
 
     const player = playerlist.get(socket.uuid);
 
-    if (player && player.country && room.selectedCountries[player.country] === socket.uuid) {
-        delete room.selectedCountries[player.country];
+    if (room.status !== "playing") {
+        if (player && player.country && room.selectedCountries[player.country] === socket.uuid) {
+            delete room.selectedCountries[player.country];
+        }
+
+        if (player && player.color && room.selectedColors[player.color] === socket.uuid) {
+            delete room.selectedColors[player.color];
+        }
     }
 
-    if (player && player.color && room.selectedColors[player.color] === socket.uuid) {
-        delete room.selectedColors[player.color];
+    if (room.status !== "playing") {
+        playerlist.remove(socket.uuid);
+    } else {
+        const player = playerlist.get(socket.uuid);
+        if (player) {
+            player.offline = true;
+        }
     }
-
-    playerlist.remove(socket.uuid);
 
     const remainingPlayers = playerlist.getByRoom(roomCode);
 

@@ -12,6 +12,12 @@ const playerlist = {
     getByUserId(userId) {
         return this.players.find((player) => player.userId === userId);
     },
+    
+    getByUserIdAndRoom(userId, roomCode) {
+        return this.players.find(
+            (player) => player.userId === userId && player.room === roomCode
+        );
+    },
 
     add(uuid, userId, roomCode, playerName) {
         const player = {
