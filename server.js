@@ -1,18 +1,3 @@
-// ========================
-// Servidor Multiplayer para Godot
-// Fluxo:
-// WaitingRoom -> SelecPais -> SelecCor -> MapaMundi
-// Com:
-// - Registro/Login com SQLite
-// - Salas
-// - Seleção de países
-// - Seleção de cores
-// - Chat
-// - Save JSON
-// - Save SQLite
-// - Sala fecha se o host sair
-// ========================
-
 const express = require("express");
 const WebSocket = require("ws");
 const fs = require("fs");
@@ -246,28 +231,17 @@ async function saveRoomStateToDb(roomCode) {
     }
 }
 
-function loadRoomStateFromDb(roomCode, callback) {
-    db.get(
-        "SELECT save_data FROM saves WHERE room_code = ?",
-        [roomCode],
-        (err, row) => {
-            if (err) {
-                callback(err, null);
-                return;
-            }
-
-            if (!row) {
-                callback(null, null);
-                return;
-            }
-
-            try {
-                callback(null, JSON.parse(row.save_data));
-            } catch (e) {
-                callback(e, null);
-            }
-        }
+async function loadRoomStateFromDb(roomCode) {
+    const res = await db.query(
+        "SELECT save_data FROM saves WHERE room_code = $1",
+        [roomCode]
     );
+
+    if (res.rows.length === 0) {
+        return null;
+    }
+
+    return JSON.parse(res.rows[0].save_data);
 }
 
 // ========================
@@ -439,6 +413,9 @@ wss.on("connection", (socket) => {
                         break;
                     }
 
+                    activeUsers.delete(user.id);
+                
+
                     socket.userId = user.id;
                     socket.username = user.username;
                     socket.email = user.email;
@@ -454,7 +431,6 @@ wss.on("connection", (socket) => {
                             email: user.email
                         }
                     });
-
                     break;
                 }
 
@@ -1220,6 +1196,12 @@ wss.on("connection", (socket) => {
 
             saveRoomState(roomCode);
             saveRoomStateToDb(roomCode);
+        }
+    });
+    socket.on("error", () => {
+        if (socket.userId && activeUsers.get(socket.userId) === socket) {
+            activeUsers.delete(socket.userId);
+            console.log(`Conta liberada por erro: ${socket.username}`);
         }
     });
 });
