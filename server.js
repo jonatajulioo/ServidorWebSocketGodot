@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 9090;
 
 initDatabase()
     .then(() => rooms.loadRoomsFromDb())
+    .then(() => rooms.startGameLoop())
     .catch((err) => {
         console.error("Erro ao iniciar banco/salas:", err);
     });
@@ -128,6 +129,10 @@ wss.on("connection", (socket) => {
 
                 case "upgrade_infantry":
                     rooms.upgradeInfantry(socket, data.content);
+                    break;
+
+                case "do_action":
+                    rooms.doAction(socket, data.content);
                     break;
 
                 default:

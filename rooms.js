@@ -639,11 +639,14 @@ function selectColor(socket, content) {
             phase: "playing",
             players: playersInRoom.map((p) => ({
                 uuid: p.uuid,
+                userId: p.userId,
                 name: p.name,
                 country: p.country,
                 color: p.color
             })),
-            playerStats: {}
+            playerStats: {},
+            actions: {},
+            territories: {}
         };
 
         for (const p of playersInRoom) {
@@ -953,9 +956,248 @@ async function loadRoomsFromDb() {
     }
 }
 
+function startGameLoop() {
+    setInterval(() => {
+        for (const [roomCode, room] of rooms.entries()) {
+            if (room.status !== "playing") continue;
+            if (!room.online) continue;
+            if (!room.gameState) continue;
+
+            if (!room.gameState.playerStats) {
+                room.gameState.playerStats = {};
+            }
+
+            const players = playerlist.getByRoom(roomCode);
+
+            for (const player of players) {
+                const id = player.uuid;
+
+                if (!room.gameState.playerStats[id]) {
+                    room.gameState.playerStats[id] = {
+                        infantry: {
+                            guarnicoes: 0,
+                            armamentos: 0,
+                            estrutura: 0
+                        },
+                        money: 1000,
+                        population: 1000
+                    };
+                }
+
+                const stats = room.gameState.playerStats[id];
+
+                const incomePerSecond = 5;
+                const populationPerSecond = 2;
+
+                stats.money += incomePerSecond;
+                stats.population += populationPerSecond;
+            }
+
+            broadcastToRoom(room, {
+                cmd: "game_state_updated",
+                content: {
+                    gameState: room.gameState
+                }
+            });
+        }
+    }, 1000);
+
+    console.log("Game loop iniciado.");
+}
+
+function doAction(socket, content) {
+    const room = rooms.get(socket.roomId);
+
+    if (!room || room.status !== "playing" || !room.gameState) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Jogo não iniciado." }
+        });
+        return;
+    }
+
+    const actionType = String(content?.type || "");
+    const now = Date.now();
+
+    if (!room.gameState.actions) {
+        room.gameState.actions = {};
+    }
+
+    if (!room.gameState.actions[socket.uuid]) {
+        room.gameState.actions[socket.uuid] = {
+            lastActionAt: 0
+        };
+    }
+
+    const playerActions = room.gameState.actions[socket.uuid];
+
+    const cooldown = 3000;
+
+    if (now - playerActions.lastActionAt < cooldown) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Aguarde para fazer outra ação." }
+        });
+        return;
+    }
+
+    switch (actionType) {
+        case "recruit":
+            actionRecruit(socket, room, content);
+            break;
+
+        case "build":
+            actionBuild(socket, room, content);
+            break;
+
+        case "attack":
+            actionAttack(socket, room, content);
+            break;
+
+        default:
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Ação inválida." }
+            });
+            return;
+    }
+
+    playerActions.lastActionAt = now;
+
+    broadcastToRoom(room, {
+        cmd: "game_state_updated",
+        content: {
+            gameState: room.gameState
+        }
+    });
+
+    saveRoomState(socket.roomId);
+    saveRoomStateToDb(socket.roomId);
+}
+
+function getPlayerStats(room, uuid) {
+    if (!room.gameState.playerStats) {
+        room.gameState.playerStats = {};
+    }
+
+    if (!room.gameState.playerStats[uuid]) {
+        room.gameState.playerStats[uuid] = {
+            infantry: {
+                guarnicoes: 0,
+                armamentos: 0,
+                estrutura: 0
+            },
+            money: 1000,
+            population: 1000,
+            troops: 0
+        };
+    }
+
+    return room.gameState.playerStats[uuid];
+}
+
+function actionRecruit(socket, room, content) {
+    const amount = Number(content?.amount || 10);
+    const stats = getPlayerStats(room, socket.uuid);
+
+    const cost = amount * 5;
+
+    if (amount <= 0 || amount > 100) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Quantidade inválida." }
+        });
+        return;
+    }
+
+    if (stats.money < cost) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Dinheiro insuficiente para recrutar." }
+        });
+        return;
+    }
+
+    if (stats.population < amount) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "População insuficiente." }
+        });
+        return;
+    }
+
+    stats.money -= cost;
+    stats.population -= amount;
+    stats.troops = Number(stats.troops || 0) + amount;
+}
+
+function actionBuild(socket, room, content) {
+    const stats = getPlayerStats(room, socket.uuid);
+    const cost = 200;
+
+    if (stats.money < cost) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Dinheiro insuficiente para construir." }
+        });
+        return;
+    }
+
+    stats.money -= cost;
+    stats.defense = Number(stats.defense || 0) + 1;
+}
+
+function actionAttack(socket, room, content) {
+    const targetUuid = String(content?.targetUuid || "");
+
+    if (!targetUuid || targetUuid === socket.uuid) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Alvo inválido." }
+        });
+        return;
+    }
+
+    const attackerStats = getPlayerStats(room, socket.uuid);
+    const defenderStats = getPlayerStats(room, targetUuid);
+
+    const attackTroops = Number(content?.troops || 0);
+
+    if (attackTroops <= 0 || attackTroops > attackerStats.troops) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Tropas inválidas para ataque." }
+        });
+        return;
+    }
+
+    const defenderPower = Number(defenderStats.troops || 0) + Number(defenderStats.defense || 0) * 20;
+
+    attackerStats.troops -= attackTroops;
+
+    if (attackTroops > defenderPower) {
+        defenderStats.troops = 0;
+        defenderStats.defense = Math.max(0, Number(defenderStats.defense || 0) - 1);
+
+        send(socket, {
+            cmd: "action_result",
+            content: { msg: "Ataque venceu." }
+        });
+    } else {
+        defenderStats.troops = Math.max(0, Number(defenderStats.troops || 0) - Math.floor(attackTroops / 2));
+
+        send(socket, {
+            cmd: "action_result",
+            content: { msg: "Ataque falhou." }
+        });
+    }
+}
+
 module.exports = {
     rooms,
     loadRoomsFromDb,
+    startGameLoop,
+    doAction,
     me,
     createRoom,
     joinRoom,
