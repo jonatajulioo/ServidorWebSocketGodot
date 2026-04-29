@@ -17,7 +17,8 @@ const express = require("express");
 const WebSocket = require("ws");
 const fs = require("fs");
 const path = require("path");
-const sqlite3 = require("sqlite3").verbose();
+const { Pool } = require("pg");
+require("dotenv").config();
 const bcrypt = require("bcrypt");
 const { randomUUID } = require("crypto");
 
@@ -36,81 +37,41 @@ if (!fs.existsSync(SAVE_DIR)) {
     fs.mkdirSync(SAVE_DIR, { recursive: true });
 }
 
-// ========================
-// SQLite
-// ========================
-const dbPath = path.join(__dirname, "game.db");
-const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error("Erro ao abrir SQLite:", err.message);
-    } else {
-        console.log("SQLite conectado em:", dbPath);
-    }
+const db = new Pool({
+    user: process.env.DB_USER || "jota",
+    host: process.env.DB_HOST || "localhost",
+    database: process.env.DB_NAME || "squad_world_war",
+    password: process.env.DB_PASS || "123456",
+    port: process.env.DB_PORT || 5432,
+    max: 20
 });
+async function initDatabase() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(30) UNIQUE NOT NULL,
+            email VARCHAR(120) UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 
-function ensureColumnExists(tableName, columnName, columnDefinition) {
-    db.all(`PRAGMA table_info(${tableName})`, [], (err, rows) => {
-        if (err) {
-            console.error(`Erro ao verificar colunas da tabela ${tableName}:`, err.message);
-            return;
-        }
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS saves (
+            id SERIAL PRIMARY KEY,
+            room_code VARCHAR(5) UNIQUE NOT NULL,
+            host_user_id INTEGER,
+            save_data TEXT NOT NULL,
+            status VARCHAR(20) DEFAULT 'waiting',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 
-        const exists = rows.some((col) => col.name === columnName);
-
-        if (!exists) {
-            db.run(
-                `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`,
-                (alterErr) => {
-                    if (alterErr) {
-                        console.error(`Erro ao adicionar coluna ${columnName} em ${tableName}:`, alterErr.message);
-                    } else {
-                        console.log(`Coluna ${columnName} adicionada em ${tableName}.`);
-                    }
-                }
-            );
-        }
-    });
-}
-
-function initDatabase() {
-    db.serialize(() => {
-        db.run(`
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        db.run(`
-            CREATE TABLE IF NOT EXISTS saves (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                room_code TEXT NOT NULL UNIQUE,
-                host_user_id INTEGER,
-                save_data TEXT NOT NULL,
-                status TEXT DEFAULT 'waiting',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `, (err) => {
-            if (err) {
-                console.error("Erro ao criar/verificar tabela saves:", err.message);
-                return;
-            }
-
-            ensureColumnExists("saves", "host_user_id", "INTEGER");
-            ensureColumnExists("saves", "status", "TEXT DEFAULT 'waiting'");
-            ensureColumnExists("saves", "updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP");
-        });
-
-        db.run(`PRAGMA journal_mode = WAL;`);
-    });
+    console.log("PostgreSQL pronto");
 }
 
 initDatabase();
-
 // ========================
 // Utilidades
 // ========================
@@ -267,21 +228,15 @@ function saveRoomStateToDb(roomCode) {
 
     const json = JSON.stringify(saveData);
 
-    db.run(`
+    await db.query(`
         INSERT INTO saves (room_code, host_user_id, save_data, status, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(room_code) DO UPDATE SET
-            host_user_id = excluded.host_user_id,
-            save_data = excluded.save_data,
-            status = excluded.status,
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        ON CONFLICT (room_code) DO UPDATE SET
+            host_user_id = EXCLUDED.host_user_id,
+            save_data = EXCLUDED.save_data,
+            status = EXCLUDED.status,
             updated_at = CURRENT_TIMESTAMP
-    `, [roomCode, room.hostUserId || null, json, room.status], (err) => {
-        if (err) {
-            console.error(`Erro ao salvar sala ${roomCode} no SQLite:`, err.message);
-        } else {
-            console.log(`Sala ${roomCode} salva no SQLite.`);
-        }
-    });
+    `, [roomCode, room.hostUserId || null, json, room.status]);
 }
 
 function loadRoomStateFromDb(roomCode, callback) {
@@ -399,85 +354,40 @@ wss.on("connection", (socket) => {
                 // ========================
                 case "register": {
                     const username = (data.content?.username || "").trim();
-                    const email = (data.content?.email || "").trim().toLowerCase();
+                    const email = (data.content?.email || "").trim();
                     const password = data.content?.password || "";
 
-                    if (!username || !email || !password) {
-                        send(socket, {
-                            cmd: "error",
-                            content: { msg: "Preencha usuário, email e senha." }
-                        });
-                        break;
-                    }
-
-                    if (password.length < 6) {
-                        send(socket, {
-                            cmd: "error",
-                            content: { msg: "A senha deve ter pelo menos 6 caracteres." }
-                        });
-                        break;
-                    }
-
-                    db.get(
-                        "SELECT id FROM users WHERE username = ? OR email = ?",
-                        [username, email],
-                        async (err, row) => {
-                            if (err) {
-                                console.error(err);
-                                send(socket, {
-                                    cmd: "error",
-                                    content: { msg: "Erro no banco de dados." }
-                                });
-                                return;
-                            }
-
-                            if (row) {
-                                send(socket, {
-                                    cmd: "error",
-                                    content: { msg: "Usuário ou email já cadastrado." }
-                                });
-                                return;
-                            }
-
-                            try {
-                                const hash = await bcrypt.hash(password, 10);
-
-                                db.run(
-                                    "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
-                                    [username, email, hash],
-                                    function (err) {
-                                        if (err) {
-                                            console.error(err);
-                                            send(socket, {
-                                                cmd: "error",
-                                                content: { msg: "Erro ao criar conta." }
-                                            });
-                                            return;
-                                        }
-
-                                        send(socket, {
-                                            cmd: "register_success",
-                                            content: {
-                                                userId: this.lastID,
-                                                username: username,
-                                                email: email
-                                            }
-                                        });
-                                    }
-                                );
-                            } catch (e) {
-                                console.error(e);
-                                send(socket, {
-                                    cmd: "error",
-                                    content: { msg: "Erro ao processar senha." }
-                                });
-                            }
-                        }
+                    const check = await db.query(
+                        "SELECT id FROM users WHERE username = $1 OR email = $2",
+                        [username, email]
                     );
+
+                    if (check.rows.length > 0) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Usuário já existe." }
+                        });
+                        break;
+                    }
+
+                    const hash = await bcrypt.hash(password, 10);
+
+                    const res = await db.query(
+                        "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+                        [username, email, hash]
+                    );
+
+                    send(socket, {
+                        cmd: "register_success",
+                        content: {
+                            userId: res.rows[0].id,
+                            username,
+                            email
+                        }
+                    });
 
                     break;
                 }
-
                 // ========================
                 // Login
                 // ========================
@@ -485,68 +395,44 @@ wss.on("connection", (socket) => {
                     const username = (data.content?.username || "").trim();
                     const password = data.content?.password || "";
 
-                    if (!username || !password) {
+                    const res = await db.query(
+                        "SELECT * FROM users WHERE username = $1",
+                        [username]
+                    );
+
+                    if (res.rows.length === 0) {
                         send(socket, {
                             cmd: "error",
-                            content: { msg: "Informe usuário e senha." }
+                            content: { msg: "Conta não encontrada." }
                         });
                         break;
                     }
 
-                    db.get(
-                        "SELECT * FROM users WHERE username = ?",
-                        [username],
-                        async (err, user) => {
-                            if (err) {
-                                console.error(err);
-                                send(socket, {
-                                    cmd: "error",
-                                    content: { msg: "Erro no banco de dados." }
-                                });
-                                return;
-                            }
+                    const user = res.rows[0];
 
-                            if (!user) {
-                                send(socket, {
-                                    cmd: "error",
-                                    content: { msg: "Conta não encontrada." }
-                                });
-                                return;
-                            }
+                    const ok = await bcrypt.compare(password, user.password_hash);
 
-                            try {
-                                const ok = await bcrypt.compare(password, user.password_hash);
+                    if (!ok) {
+                        send(socket, {
+                            cmd: "error",
+                            content: { msg: "Senha incorreta." }
+                        });
+                        break;
+                    }
 
-                                if (!ok) {
-                                    send(socket, {
-                                        cmd: "error",
-                                        content: { msg: "Senha incorreta." }
-                                    });
-                                    return;
-                                }
+                    socket.userId = user.id;
+                    socket.username = user.username;
+                    socket.email = user.email;
+                    socket.isAuthenticated = true;
 
-                                socket.userId = user.id;
-                                socket.username = user.username;
-                                socket.email = user.email;
-                                socket.isAuthenticated = true;
-
-                                send(socket, {
-                                    cmd: "login_success",
-                                    content: {
-                                        userId: user.id,
-                                        username: user.username,
-                                        email: user.email
-                                    }
-                                });
-                            } catch (e) {
-                                console.error(e);
-                                send(socket, {
-                                    cmd: "error",
-                                    content: { msg: "Erro ao validar login." }
-                                });
-                            }
+                    send(socket, {
+                        cmd: "login_success",
+                        content: {
+                            userId: user.id,
+                            username: user.username,
+                            email: user.email
                         }
-                    );
+                    });
 
                     break;
                 }
