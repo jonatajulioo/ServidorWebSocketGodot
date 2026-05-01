@@ -310,11 +310,6 @@ function joinRoom(socket, content) {
 
         newPlayer = oldPlayer;
 
-        if (roomToJoin.gameState?.playerStats?.[oldUuid]) {
-            roomToJoin.gameState.playerStats[socket.uuid] = roomToJoin.gameState.playerStats[oldUuid];
-            delete roomToJoin.gameState.playerStats[oldUuid];
-        }
-
         if (oldPlayer.country) {
             delete roomToJoin.selectedCountries[oldPlayer.country];
             roomToJoin.selectedCountries[oldPlayer.country] = socket.uuid;
@@ -649,6 +644,26 @@ function selectColor(socket, content) {
     player.color = colorName;
     room.selectedColors[colorName] = socket.uuid;
 
+    if (room.status === "playing") {
+        if (!room.gameState.territories) {
+            room.gameState.territories = {};
+        }
+
+        if (player.country && !room.gameState.territories[player.country]) {
+            room.gameState.territories[player.country] = {
+                name: player.country,
+                ownerUuid: player.uuid,
+                ownerUserId: player.userId,
+                ownerName: player.name,
+                color: player.color,
+                troops: 100,
+                defense: 1,
+                income: 10,
+                population: 1000
+            };
+        }
+    }
+
     broadcastToRoom(room, {
         cmd: "color_selected",
         content: {
@@ -677,18 +692,22 @@ function selectColor(socket, content) {
             })),
             playerStats: {},
             actions: {},
-            territories: {}
+            territories: createInitialTerritories(playersInRoom)
         };
 
         for (const p of playersInRoom) {
-            room.gameState.playerStats[p.uuid] = {
+            room.gameState.playerStats[p.userId] = {
                 infantry: {
                     guarnicoes: 0,
                     armamentos: 0,
                     estrutura: 0
                 },
                 money: 1000,
-                population: 1000
+                population: 1000,
+                troops: 0,
+                defense: 0,
+                attacksWon: 0,
+                attacksLost: 0
             };
         }
 
@@ -781,19 +800,23 @@ function upgradeInfantry(socket, content) {
         room.gameState.playerStats = {};
     }
 
-    if (!room.gameState.playerStats[socket.uuid]) {
-        room.gameState.playerStats[socket.uuid] = {
+    if (!room.gameState.playerStats[socket.userId]) {
+        room.gameState.playerStats[socket.userId] = {
             infantry: {
                 guarnicoes: 0,
                 armamentos: 0,
                 estrutura: 0
             },
             money: 1000,
-            population: 1000
+            population: 1000,
+            troops: 0,
+            defense: 0,
+            attacksWon: 0,
+            attacksLost: 0
         };
     }
 
-    const stats = room.gameState.playerStats[socket.uuid];
+    const stats = room.gameState.playerStats[socket.userId];
 
     if (!stats.infantry) {
         stats.infantry = {
@@ -837,34 +860,34 @@ function handleDisconnect(socket) {
     const room = rooms.get(roomCode);
 
     if (!room) {
-        playerlist.remove(socket.uuid);
+        playerlist.remove(socket.userId);
         return;
     }
 
-    const isHost = room.hostId === socket.uuid;
+    const isHost = room.hostId === socket.userId;
 
     if (isHost) {
         console.log(`Host saiu da sala ${roomCode}, mas a sala continuará existindo.`);
     }
 
-    delete room.players[socket.uuid];
+    delete room.players[socket.userId];
 
-    const player = playerlist.get(socket.uuid);
+    const player = playerlist.get(socket.userId);
 
     if (room.status !== "playing") {
-        if (player && player.country && room.selectedCountries[player.country] === socket.uuid) {
+        if (player && player.country && room.selectedCountries[player.country] === socket.userId) {
             delete room.selectedCountries[player.country];
         }
 
-        if (player && player.color && room.selectedColors[player.color] === socket.uuid) {
+        if (player && player.color && room.selectedColors[player.color] === socket.userId) {
             delete room.selectedColors[player.color];
         }
     }
 
     if (room.status !== "playing") {
-        playerlist.remove(socket.uuid);
+        playerlist.remove(socket.userId);
     } else {
-        const player = playerlist.get(socket.uuid);
+        const player = playerlist.get(socket.userId);
         if (player) {
             player.offline = true;
         }
@@ -887,7 +910,7 @@ function handleDisconnect(socket) {
     for (const clientUuid in room.players) {
         send(room.players[clientUuid], {
             cmd: "player_disconnected",
-            content: { uuid: socket.uuid }
+            content: { uuid: socket.userId }
         });
     }
 
@@ -942,7 +965,9 @@ async function loadRoomsFromDb() {
     } catch (err) {
         console.error("Erro ao carregar salas do PostgreSQL:", err);
     }
-}async function loadRoomsFromDb() {
+}
+
+async function loadRoomsFromDb() {
     try {
         const res = await db.query("SELECT save_data FROM saves");
 
@@ -1011,14 +1036,27 @@ function startGameLoop() {
                             estrutura: 0
                         },
                         money: 1000,
-                        population: 1000
+                        population: 1000,
+                        troops: 0,
+                        defense: 0,
+                        attacksWon: 0,
+                        attacksLost: 0
                     };
                 }
 
                 const stats = room.gameState.playerStats[id];
 
-                const incomePerSecond = 5;
-                const populationPerSecond = 2;
+                let incomePerSecond = 1;
+                let populationPerSecond = 1;
+
+                if (room.gameState.territories) {
+                    for (const territory of Object.values(room.gameState.territories)) {
+                        if (territory.ownerUuid === player.uuid) {
+                            incomePerSecond += Number(territory.income || 0);
+                            populationPerSecond += 1;
+                        }
+                    }
+                }
 
                 stats.money += incomePerSecond;
                 stats.population += populationPerSecond;
@@ -1085,6 +1123,14 @@ function doAction(socket, content) {
             actionAttack(socket, room, content);
             break;
 
+        case "reinforce":
+            actionReinforce(socket, room, content);
+            break;
+        
+        case "attack_territory":
+            actionAttackTerritory(socket, room, content);
+            break;
+
         default:
             send(socket, {
                 cmd: "error",
@@ -1106,13 +1152,15 @@ function doAction(socket, content) {
     saveRoomStateToDb(socket.roomId);
 }
 
-function getPlayerStats(room, uuid) {
+function getPlayerStats(room, userId) {
+    const id = String(userId);
+
     if (!room.gameState.playerStats) {
         room.gameState.playerStats = {};
     }
 
-    if (!room.gameState.playerStats[uuid]) {
-        room.gameState.playerStats[uuid] = {
+    if (!room.gameState.playerStats[id]) {
+        room.gameState.playerStats[id] = {
             infantry: {
                 guarnicoes: 0,
                 armamentos: 0,
@@ -1120,16 +1168,19 @@ function getPlayerStats(room, uuid) {
             },
             money: 1000,
             population: 1000,
-            troops: 0
+            troops: 0,
+            defense: 0,
+            attacksWon: 0,
+            attacksLost: 0
         };
     }
 
-    return room.gameState.playerStats[uuid];
+    return room.gameState.playerStats[id];
 }
 
 function actionRecruit(socket, room, content) {
     const amount = Number(content?.amount || 10);
-    const stats = getPlayerStats(room, socket.uuid);
+    const stats = getPlayerStats(room, socket.userId);
 
     const cost = amount * 5;
 
@@ -1163,7 +1214,7 @@ function actionRecruit(socket, room, content) {
 }
 
 function actionBuild(socket, room, content) {
-    const stats = getPlayerStats(room, socket.uuid);
+    const stats = getPlayerStats(room, socket.userId);
     const cost = 200;
 
     if (stats.money < cost) {
@@ -1222,6 +1273,156 @@ function actionAttack(socket, room, content) {
             content: { msg: "Ataque falhou." }
         });
     }
+}
+
+function createInitialTerritories(playersInRoom) {
+    const territories = {};
+
+    for (const player of playersInRoom) {
+        if (!player.country) continue;
+
+        territories[player.country] = {
+            name: player.country,
+            ownerUuid: player.uuid,
+            ownerUserId: player.userId,
+            ownerName: player.name,
+            color: player.color,
+            troops: 100,
+            defense: 1,
+            income: 10,
+            population: 1000
+        };
+    }
+
+    return territories;
+}
+
+function actionReinforce(socket, room, content) {
+    const territoryName = String(content?.territory || "");
+    const amount = Number(content?.amount || 0);
+
+    if (!room.gameState.territories || !room.gameState.territories[territoryName]) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Território inválido." }
+        });
+        return;
+    }
+
+    const territory = room.gameState.territories[territoryName];
+
+    if (territory.ownerUuid !== socket.uuid) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Esse território não é seu." }
+        });
+        return;
+    }
+
+    const stats = getPlayerStats(room, socket.userId);
+
+    if (amount <= 0 || amount > stats.troops) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Quantidade de tropas inválida." }
+        });
+        return;
+    }
+
+    stats.troops -= amount;
+    territory.troops += amount;
+}
+
+function actionAttackTerritory(socket, room, content) {
+    const targetName = String(content?.territory || "").trim();
+    const attackTroops = Number(content?.troops || 0);
+
+    if (!room.gameState.territories || !room.gameState.territories[targetName]) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Território inválido." }
+        });
+        return;
+    }
+
+    const territory = room.gameState.territories[targetName];
+
+    if (String(territory.ownerUserId) === String(socket.userId)) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Você não pode atacar seu próprio território." }
+        });
+        return;
+    }
+
+    const attackerStats = getPlayerStats(room, socket.userId);
+
+    if (attackTroops <= 0 || attackTroops > attackerStats.troops) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Tropas inválidas para ataque." }
+        });
+        return;
+    }
+
+    const defenseTroops = Number(territory.troops || 0);
+    const defenseBonus = Number(territory.defense || 0) * 25;
+    const defenderPower = defenseTroops + defenseBonus;
+
+    attackerStats.troops -= attackTroops;
+
+    if (attackTroops > defenderPower) {
+        const oldOwnerUserId = territory.ownerUserId;
+
+        territory.ownerUserId = socket.userId;
+        territory.ownerUuid = socket.uuid;
+        territory.ownerName = socket.username;
+        territory.color = getPlayerColorByUserId(room, socket.userId);
+
+        territory.troops = Math.max(1, Math.floor(attackTroops - defenderPower));
+        territory.defense = Math.max(0, Number(territory.defense || 0) - 1);
+
+        attackerStats.attacksWon = Number(attackerStats.attacksWon || 0) + 1;
+
+        const defenderStats = getPlayerStats(room, oldOwnerUserId);
+        defenderStats.attacksLost = Number(defenderStats.attacksLost || 0) + 1;
+
+        broadcastToRoom(room, {
+            cmd: "territory_conquered",
+            content: {
+                territory: targetName,
+                newOwnerUserId: socket.userId,
+                newOwnerName: socket.username,
+                color: territory.color
+            }
+        });
+    } else {
+        territory.troops = Math.max(0, defenseTroops - Math.floor(attackTroops / 2));
+
+        attackerStats.attacksLost = Number(attackerStats.attacksLost || 0) + 1;
+
+        const defenderStats = getPlayerStats(room, territory.ownerUserId);
+        defenderStats.attacksWon = Number(defenderStats.attacksWon || 0) + 1;
+
+        send(socket, {
+            cmd: "action_result",
+            content: { msg: "Ataque falhou." }
+        });
+    }
+}
+
+function getPlayerColorByUserId(room, userId) {
+    if (room.gameState?.players) {
+        const player = room.gameState.players.find(
+            (p) => String(p.userId) === String(userId)
+        );
+
+        if (player) {
+            return player.color;
+        }
+    }
+
+    return "Cinza";
 }
 
 module.exports = {
