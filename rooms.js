@@ -516,7 +516,7 @@ function requestStart(socket) {
             cmd: "error",
             content: { msg: "Para iniciar precisa de 2 ou mais jogadores." }
         });
-        return;
+        //return;
     }
 
     room.status = "country_selection";
