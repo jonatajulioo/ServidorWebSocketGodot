@@ -310,12 +310,12 @@ function joinRoom(socket, content) {
 
         newPlayer = oldPlayer;
 
-        if (room.phase === "select_country") {
+        if (roomToJoin.status === "select_country") {
             send(socket, {
                 cmd: "start_game",
                 content: {
-                    countries_taken: room.countries_taken || [],
-                    players: room.players
+                    countries_taken: roomToJoin.countries_taken || [],
+                    players: roomToJoin.players
                 }
             });
         }
