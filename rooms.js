@@ -383,6 +383,35 @@ function joinRoom(socket, content) {
 
     sendRoomState(socket, roomCode);
 
+    if (roomToJoin.status === "country_selection") {
+        send(socket, {
+            cmd: "start_game",
+            content: buildRoomState(roomCode)
+        });
+
+        saveRoomState(roomCode);
+        saveRoomStateToDb(roomCode);
+        return;
+    }
+
+    if (roomToJoin.status === "color_selection") {
+        if (!newPlayer.country) {
+            send(socket, {
+                cmd: "start_game",
+                content: buildRoomState(roomCode)
+            });
+        } else {
+            send(socket, {
+                cmd: "country_selection_finished",
+                content: buildRoomState(roomCode)
+            });
+        }
+
+        saveRoomState(roomCode);
+        saveRoomStateToDb(roomCode);
+        return;
+    }
+
     if (roomToJoin.status === "playing") {
         if (!newPlayer.country) {
             send(socket, {
