@@ -310,6 +310,16 @@ function joinRoom(socket, content) {
 
         newPlayer = oldPlayer;
 
+        if (room.phase === "select_country") {
+            send(socket, {
+                cmd: "start_game",
+                content: {
+                    countries_taken: room.countries_taken || [],
+                    players: room.players
+                }
+            });
+        }
+
         if (oldPlayer.country) {
             delete roomToJoin.selectedCountries[oldPlayer.country];
             roomToJoin.selectedCountries[oldPlayer.country] = socket.uuid;
@@ -1026,7 +1036,7 @@ function startGameLoop() {
             const players = playerlist.getByRoom(roomCode);
 
             for (const player of players) {
-                const id = player.uuid;
+                const id = player.userId;
 
                 if (!room.gameState.playerStats[id]) {
                     room.gameState.playerStats[id] = {
@@ -1051,7 +1061,7 @@ function startGameLoop() {
 
                 if (room.gameState.territories) {
                     for (const territory of Object.values(room.gameState.territories)) {
-                        if (territory.ownerUuid === player.uuid) {
+                        if (territory.ownerUserId === player.userId) {
                             incomePerSecond += Number(territory.income || 0);
                             populationPerSecond += 1;
                         }
@@ -1240,7 +1250,7 @@ function actionAttack(socket, room, content) {
         return;
     }
 
-    const attackerStats = getPlayerStats(room, socket.uuid);
+    const attackerStats = getPlayerStats(room, socket.userId);
     const defenderStats = getPlayerStats(room, targetUuid);
 
     const attackTroops = Number(content?.troops || 0);
