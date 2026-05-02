@@ -310,7 +310,7 @@ function joinRoom(socket, content) {
 
         newPlayer = oldPlayer;
 
-        if (roomToJoin.status === "select_country") {
+        if (roomToJoin.status === "country_selection") {
             send(socket, {
                 cmd: "start_game",
                 content: {
