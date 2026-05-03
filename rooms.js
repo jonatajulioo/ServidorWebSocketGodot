@@ -1435,6 +1435,7 @@ function actionAttackTerritory(socket, room, content) {
                 color: territory.color
             }
         });
+        console.log(`Ataque ao território ${targetName} foi um sucesso parcial. Tropas restantes na defesa: ${territory.troops}`);
     } else {
         territory.troops = Math.max(0, defenseTroops - Math.floor(attackTroops / 2));
 
@@ -1442,11 +1443,11 @@ function actionAttackTerritory(socket, room, content) {
 
         const defenderStats = getPlayerStats(room, territory.ownerUserId);
         defenderStats.attacksWon = Number(defenderStats.attacksWon || 0) + 1;
-
         send(socket, {
             cmd: "action_result",
             content: { msg: "Ataque falhou." }
         });
+        console.log(`Ataque ao território ${targetName} falhou. Tropas restantes na defesa: ${territory.troops}`);
     }
 }
 
