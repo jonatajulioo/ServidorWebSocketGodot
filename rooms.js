@@ -81,17 +81,17 @@ function broadcastRoomState(roomCode) {
 
 function everyoneHasCountry(roomCode) {
     const players = playerlist.getByRoom(roomCode);
-    return players.length >= 2 && players.every((p) => p.country);
+    return players.length >= 1 && players.every((p) => p.country);
 }
 
 function everyoneHasColor(roomCode) {
     const players = playerlist.getByRoom(roomCode);
-    return players.length >= 2 && players.every((p) => p.color);
+    return players.length >= 1 && players.every((p) => p.color);
 }
 
 function everyoneReadyForMap(roomCode) {
     const players = playerlist.getByRoom(roomCode);
-    return players.length >= 2 && players.every((p) => p.country && p.color);
+    return players.length >= 1 && players.every((p) => p.country && p.color);
 }
 
 function saveRoomState(roomCode) {
@@ -548,7 +548,7 @@ function selectCountry(socket, content) {
             cmd: "error",
             content: { msg: "A seleção de países não está ativa." }
         });
-        return;
+        //return;
     }
 
     const countryName = String(content?.country || "").trim();
