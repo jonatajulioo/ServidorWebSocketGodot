@@ -315,7 +315,7 @@ function joinRoom(socket, content) {
                 cmd: "start_game",
                 content: {
                     countries_taken: roomToJoin.countries_taken || [],
-                    players: roomToJoin.players
+                    players: getSerializablePlayers(roomCode)
                 }
             });
         }
@@ -367,7 +367,7 @@ function joinRoom(socket, content) {
 
     send(socket, {
         cmd: "spawn_network_players",
-        content: { players: roomPlayers }
+        content: { players: getSerializablePlayers(roomCode) }
     });
 
     for (const clientUuid in roomToJoin.players) {
