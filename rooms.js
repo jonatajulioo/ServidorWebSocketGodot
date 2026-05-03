@@ -1345,6 +1345,7 @@ function actionReinforce(socket, room, content) {
             cmd: "error",
             content: { msg: "Território inválido." }
         });
+        console.log(`O player ${socket.username} tentou reforçar um território inválido: ${territoryName}`);
         return;
     }
 
@@ -1355,6 +1356,7 @@ function actionReinforce(socket, room, content) {
             cmd: "error",
             content: { msg: "Esse território não é seu." }
         });
+        console.log(`O player ${socket.username} tentou reforçar o território ${territoryName} que não é seu.`);
         return;
     }
 
@@ -1365,6 +1367,7 @@ function actionReinforce(socket, room, content) {
             cmd: "error",
             content: { msg: "Quantidade de tropas inválida." }
         });
+        console.log(`O player ${socket.username} tentou reforçar o território ${territoryName} com uma quantidade inválida de tropas: ${amount}`);
         return;
     }
 
@@ -1381,6 +1384,7 @@ function actionAttackTerritory(socket, room, content) {
             cmd: "error",
             content: { msg: "Território inválido." }
         });
+        console.log(`O player ${socket.username} tentou atacar um território inválido: ${targetName}`);
         return;
     }
 
@@ -1391,6 +1395,7 @@ function actionAttackTerritory(socket, room, content) {
             cmd: "error",
             content: { msg: "Você não pode atacar seu próprio território." }
         });
+        console.log(`O player ${socket.username} tentou atacar seu próprio território: ${targetName}`);
         return;
     }
 
@@ -1401,6 +1406,7 @@ function actionAttackTerritory(socket, room, content) {
             cmd: "error",
             content: { msg: "Tropas inválidas para ataque." }
         });
+        console.log(`O player ${socket.username} tentou atacar o território ${targetName} com uma quantidade inválida de tropas: ${attackTroops}`);
         return;
     }
 
