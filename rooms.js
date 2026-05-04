@@ -736,10 +736,27 @@ function selectColor(socket, content) {
 
         for (const p of playersInRoom) {
             room.gameState.playerStats[p.userId] = {
-                infantry: {
-                    guarnicoes: 0,
-                    armamentos: 0,
-                    estrutura: 0
+                military: {
+                    infantry: {
+                        guarnicoes: 0,
+                        armamentos: 0,
+                        estrutura: 1
+                    },
+                    terrestre: {
+                        veiculos: 0,
+                        locomocao: 0,
+                        carrosDeGuerra: 0
+                    },
+                    naval: {
+                        submarinos: 0,
+                        frotas: 0,
+                        estrutura: 1
+                    },
+                    aereo: {
+                        aeronaves: 0,
+                        antiAereo: 0,
+                        galpao: 1
+                    }
                 },
                 money: 1000,
                 population: 1000,
@@ -813,7 +830,7 @@ async function loadGame(socket, content) {
     }
 }
 
-function upgradeInfantry(socket, content) {
+function upgradeMilitary(socket, content) {
     const room = rooms.get(socket.roomId);
 
     if (!room || !room.gameState) {
@@ -824,52 +841,73 @@ function upgradeInfantry(socket, content) {
         return;
     }
 
-    const upgradeType = String(content?.type || "");
-    const allowed = ["guarnicoes", "armamentos", "estrutura"];
+    const category = String(content?.category || "");
+    const type = String(content?.type || "");
 
-    if (!allowed.includes(upgradeType)) {
-        send(socket, {
-            cmd: "error",
-            content: { msg: "Tipo de upgrade inválido." }
-        });
-        return;
+    const stats = getPlayerStats(room, socket.userId);
+
+    // cria estrutura se não existir
+    if (!stats.military) {
+        stats.military = {};
     }
 
-    if (!room.gameState.playerStats) {
-        room.gameState.playerStats = {};
+    if (!stats.military[category]) {
+        stats.military[category] = {};
     }
 
-    if (!room.gameState.playerStats[socket.userId]) {
-        room.gameState.playerStats[socket.userId] = {
-            infantry: {
-                guarnicoes: 0,
-                armamentos: 0,
-                estrutura: 0
-            },
-            money: 1000,
-            population: 1000,
-            troops: 0,
-            defense: 0,
-            attacksWon: 0,
-            attacksLost: 0
-        };
+    const cat = stats.military[category];
+
+    if (!cat[type] && cat[type] !== 0) {
+        cat[type] = 0;
     }
 
-    const stats = room.gameState.playerStats[socket.userId];
+    // =============================
+    // REGRAS (INFANTARIA)
+    // =============================
+    if (category === "infantry") {
+        if (type === "guarnicoes") {
+            if ((cat.estrutura || 0) <= cat.guarnicoes) {
+                send(socket, {
+                    cmd: "error",
+                    content: { msg: "Estrutura deve ser maior que guarnições." }
+                });
+                return;
+            }
+        }
 
-    if (!stats.infantry) {
-        stats.infantry = {
-            guarnicoes: 0,
-            armamentos: 0,
-            estrutura: 0
-        };
+        if (type === "armamentos") {
+            if ((cat.guarnicoes || 0) <= cat.armamentos) {
+                send(socket, {
+                    cmd: "error",
+                    content: { msg: "Guarnições deve ser maior que armamentos." }
+                });
+                return;
+            }
+        }
+    }
+    if (category === "naval") {
+        if (type === "submarinos") {
+            if ((cat.estrutura || 0) <= cat.submarinos) {
+                send(socket, {
+                    cmd: "error",
+                    content: { msg: "Estrutura deve ser maior que submarinos." }
+                });
+                return;
+            }
+        }
+
+        if (type === "frotas") {
+            if ((cat.estrutura || 0) <= cat.frotas) {
+                send(socket, {
+                    cmd: "error",
+                    content: { msg: "Estrutura deve ser maior que frotas." }
+                });
+                return;
+            }
+        }
     }
 
-    if (typeof stats.money !== "number") {
-        stats.money = 1000;
-    }
-
-    const currentLevel = Number(stats.infantry[upgradeType] || 0);
+    const currentLevel = Number(cat[type] || 0);
     const cost = (currentLevel + 1) * 100;
 
     if (stats.money < cost) {
@@ -881,7 +919,7 @@ function upgradeInfantry(socket, content) {
     }
 
     stats.money -= cost;
-    stats.infantry[upgradeType] = currentLevel + 1;
+    cat[type] = currentLevel + 1;
 
     broadcastToRoom(room, {
         cmd: "game_state_updated",
@@ -889,9 +927,6 @@ function upgradeInfantry(socket, content) {
             gameState: room.gameState
         }
     });
-
-    saveRoomState(socket.roomId);
-    saveRoomStateToDb(socket.roomId);
 }
 
 function handleDisconnect(socket) {
@@ -1069,10 +1104,27 @@ function startGameLoop() {
 
                 if (!room.gameState.playerStats[id]) {
                     room.gameState.playerStats[id] = {
-                        infantry: {
-                            guarnicoes: 0,
-                            armamentos: 0,
-                            estrutura: 0
+                        military: {
+                            infantry: {
+                                guarnicoes: 0,
+                                armamentos: 0,
+                                estrutura: 0
+                            },
+                            terrestre: {
+                                veiculos: 0,
+                                locomocao: 0,
+                                carrosDeGuerra: 0
+                            },
+                            naval: {
+                                submarinos: 0,
+                                frotas: 0,
+                                estrutura: 0
+                            },
+                            aereo: {
+                                aeronaves: 0,
+                                antiAereo: 0,
+                                galpao: 0
+                            }
                         },
                         money: 1000,
                         population: 1000,
@@ -1200,10 +1252,27 @@ function getPlayerStats(room, userId) {
 
     if (!room.gameState.playerStats[id]) {
         room.gameState.playerStats[id] = {
-            infantry: {
-                guarnicoes: 0,
-                armamentos: 0,
-                estrutura: 0
+            military: {
+                infantry: {
+                    guarnicoes: 0,
+                    armamentos: 0,
+                    estrutura: 0
+                },
+                terrestre: {
+                    veiculos: 0,
+                    locomocao: 0,
+                    carrosDeGuerra: 0
+                },
+                naval: {
+                    submarinos: 0,
+                    frotas: 0,
+                    estrutura: 0
+                },
+                aereo: {
+                    aeronaves: 0,
+                    antiAereo: 0,
+                    galpao: 0
+                }
             },
             money: 1000,
             population: 1000,
@@ -1471,6 +1540,46 @@ function getPlayerColorByUserId(room, userId) {
     return "Cinza";
 }
 
+function ensureMilitaryStats(stats) {
+    if (!stats.military) {
+        stats.military = {};
+    }
+
+    if (!stats.military.infantry) {
+        stats.military.infantry = stats.infantry || {
+            guarnicoes: 0,
+            armamentos: 0,
+            estrutura: 0
+        };
+    }
+
+    if (!stats.military.terrestre) {
+        stats.military.terrestre = {
+            veiculos: 0,
+            locomocao: 0,
+            carrosDeGuerra: 0
+        };
+    }
+
+    if (!stats.military.naval) {
+        stats.military.naval = {
+            submarinos: 0,
+            frotas: 0,
+            estrutura: 0
+        };
+    }
+
+    if (!stats.military.aereo) {
+        stats.military.aereo = {
+            aeronaves: 0,
+            antiAereo: 0,
+            galpao: 0
+        };
+    }
+
+    stats.infantry = stats.military.infantry;
+}
+
 module.exports = {
     rooms,
     loadRoomsFromDb,
@@ -1486,6 +1595,6 @@ module.exports = {
     selectColor,
     saveGame,
     loadGame,
-    upgradeInfantry,
+    upgradeMilitary,
     handleDisconnect
 };
