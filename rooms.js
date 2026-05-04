@@ -1089,7 +1089,7 @@ function createDefaultStats() {
         },
         money: 1000,
         population: 1000,
-        troops: 0,
+        troops: 20,
         defense: 0,
         attacksWon: 0,
         attacksLost: 0
