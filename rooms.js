@@ -1086,6 +1086,45 @@ async function loadRoomsFromDb() {
     }
 }
 
+function createDefaultStats() {
+    return {
+        military: {
+            infantry: {
+                guarnicoes: 0,
+                armamentos: 0,
+                estrutura: 0
+            },
+            terrestre: {
+                veiculos: 0,
+                locomocao: 0,
+                carrosDeGuerra: 0
+            },
+            naval: {
+                submarinos: 0,
+                frotas: 0,
+                estrutura: 0
+            },
+            aereo: {
+                aeronaves: 0,
+                antiAereo: 0,
+                galpao: 0
+            }
+        },
+        inventory: {
+            ferroBruto: 0,
+            ferroRefinado: 0,
+            fruto: 0,
+            petroleo: 0
+        },
+        money: 1000,
+        population: 1000,
+        troops: 0,
+        defense: 0,
+        attacksWon: 0,
+        attacksLost: 0
+    };
+}
+
 function startGameLoop() {
     setInterval(() => {
         for (const [roomCode, room] of rooms.entries()) {
@@ -1103,36 +1142,7 @@ function startGameLoop() {
                 const id = player.userId;
 
                 if (!room.gameState.playerStats[id]) {
-                    room.gameState.playerStats[id] = {
-                        military: {
-                            infantry: {
-                                guarnicoes: 0,
-                                armamentos: 0,
-                                estrutura: 0
-                            },
-                            terrestre: {
-                                veiculos: 0,
-                                locomocao: 0,
-                                carrosDeGuerra: 0
-                            },
-                            naval: {
-                                submarinos: 0,
-                                frotas: 0,
-                                estrutura: 0
-                            },
-                            aereo: {
-                                aeronaves: 0,
-                                antiAereo: 0,
-                                galpao: 0
-                            }
-                        },
-                        money: 1000,
-                        population: 1000,
-                        troops: 0,
-                        defense: 0,
-                        attacksWon: 0,
-                        attacksLost: 0
-                    };
+                    room.gameState.playerStats[id] = createDefaultStats();
                 }
 
                 const stats = room.gameState.playerStats[id];
@@ -1251,36 +1261,7 @@ function getPlayerStats(room, userId) {
     }
 
     if (!room.gameState.playerStats[id]) {
-        room.gameState.playerStats[id] = {
-            military: {
-                infantry: {
-                    guarnicoes: 0,
-                    armamentos: 0,
-                    estrutura: 0
-                },
-                terrestre: {
-                    veiculos: 0,
-                    locomocao: 0,
-                    carrosDeGuerra: 0
-                },
-                naval: {
-                    submarinos: 0,
-                    frotas: 0,
-                    estrutura: 0
-                },
-                aereo: {
-                    aeronaves: 0,
-                    antiAereo: 0,
-                    galpao: 0
-                }
-            },
-            money: 1000,
-            population: 1000,
-            troops: 0,
-            defense: 0,
-            attacksWon: 0,
-            attacksLost: 0
-        };
+        room.gameState.playerStats[id] = createDefaultStats();
     }
 
     return room.gameState.playerStats[id];
