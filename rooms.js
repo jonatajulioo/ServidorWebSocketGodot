@@ -735,36 +735,7 @@ function selectColor(socket, content) {
         };
 
         for (const p of playersInRoom) {
-            room.gameState.playerStats[p.userId] = {
-                military: {
-                    infantry: {
-                        guarnicoes: 0,
-                        armamentos: 0,
-                        estrutura: 1
-                    },
-                    terrestre: {
-                        veiculos: 0,
-                        locomocao: 0,
-                        carrosDeGuerra: 0
-                    },
-                    naval: {
-                        submarinos: 0,
-                        frotas: 0,
-                        estrutura: 1
-                    },
-                    aereo: {
-                        aeronaves: 0,
-                        antiAereo: 0,
-                        galpao: 1
-                    }
-                },
-                money: 1000,
-                population: 1000,
-                troops: 0,
-                defense: 0,
-                attacksWon: 0,
-                attacksLost: 0
-            };
+            room.gameState.playerStats[id] = createDefaultStats();
         }
 
         broadcastToRoom(room, {
@@ -1111,10 +1082,10 @@ function createDefaultStats() {
             }
         },
         inventory: {
-            ferroBruto: 0,
-            ferroRefinado: 0,
-            fruto: 0,
-            petroleo: 0
+            ferroBruto: 10,
+            ferroRefinado: 5,
+            fruto: 2,
+            petroleo: 5
         },
         money: 1000,
         population: 1000,
