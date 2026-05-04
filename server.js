@@ -127,12 +127,12 @@ wss.on("connection", (socket) => {
                     await rooms.loadGame(socket, data.content);
                     break;
 
-                case "upgrade_infantry":
-                    rooms.upgradeInfantry(socket, data.content);
-                    break;
-
                 case "do_action":
                     rooms.doAction(socket, data.content);
+                    break;
+                
+                case "upgrade_military":
+                    rooms.upgradeMilitary(socket, data.content);
                     break;
 
                 default:
