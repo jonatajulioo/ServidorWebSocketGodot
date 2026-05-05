@@ -1532,10 +1532,369 @@ function ensureMilitaryStats(stats) {
     stats.infantry = stats.military.infantry;
 }
 
+function addItem(stats, item, amount) {
+    if (!stats.inventory) stats.inventory = {};
+    if (!stats.inventory[item]) stats.inventory[item] = 0;
+
+    stats.inventory[item] += amount;
+}
+
+function removeItem(stats, item, amount) {
+    if (!stats.inventory || !stats.inventory[item]) return false;
+    if (stats.inventory[item] < amount) return false;
+
+    stats.inventory[item] -= amount;
+    return true;
+}
+
+function requestTrade(socket, content) {
+    const room = rooms.get(socket.roomId);
+    if (!room || !room.gameState) return;
+
+    const fromUserId = socket.userId;
+    const targetUserId = Number(content.targetUserId);
+
+    const myItem = content.myItem;
+    const myAmount = Number(content.myAmount);
+
+    const targetItem = content.targetItem;
+    const targetAmount = Number(content.targetAmount);
+
+    const fromStats = getPlayerStats(room, fromUserId);
+    const toStats = getPlayerStats(room, targetUserId);
+}
+
+function getSocketByUserId(room, userId) {
+    for (const uuid in room.players) {
+        const player = playerlist.get(uuid);
+
+        if (player && String(player.userId) === String(userId)) {
+            return room.players[uuid];
+        }
+    }
+
+    return null;
+}
+
+function addItem(stats, item, amount) {
+    if (!stats.inventory) stats.inventory = {};
+    if (!stats.inventory[item]) stats.inventory[item] = 0;
+
+    stats.inventory[item] += amount;
+}
+
+function hasItem(stats, item, amount) {
+    if (!stats.inventory) return false;
+    return Number(stats.inventory[item] || 0) >= amount;
+}
+
+function removeItem(stats, item, amount) {
+    if (!hasItem(stats, item, amount)) return false;
+
+    stats.inventory[item] -= amount;
+    return true;
+}
+
+function requestTrade(socket, content) {
+    const room = rooms.get(socket.roomId);
+
+    if (!room || !room.gameState) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Jogo não iniciado." }
+        });
+        return;
+    }
+
+    const targetUserId = Number(content?.targetUserId);
+
+    if (!targetUserId || targetUserId === socket.userId) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Jogador inválido para troca." }
+        });
+        return;
+    }
+
+    const targetSocket = getSocketByUserId(room, targetUserId);
+
+    if (!targetSocket) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Jogador não está online." }
+        });
+        return;
+    }
+
+    if (!room.trades) {
+        room.trades = {};
+    }
+
+    const tradeId = `${socket.userId}_${targetUserId}_${Date.now()}`;
+
+    const trade = {
+        tradeId,
+        status: "pending",
+        requesterUserId: socket.userId,
+        targetUserId,
+        offers: {
+            [socket.userId]: {},
+            [targetUserId]: {}
+        },
+        confirmed: {
+            [socket.userId]: false,
+            [targetUserId]: false
+        }
+    };
+
+    room.trades[tradeId] = trade;
+
+    send(targetSocket, {
+        cmd: "trade_request",
+        content: trade
+    });
+
+    send(socket, {
+        cmd: "trade_request_sent",
+        content: trade
+    });
+}
+
+function acceptTrade(socket, content) {
+    const room = rooms.get(socket.roomId);
+    if (!room || !room.trades) return;
+
+    const tradeId = String(content?.tradeId || "");
+    const trade = room.trades[tradeId];
+
+    if (!trade) return;
+
+    if (Number(trade.targetUserId) !== Number(socket.userId)) {
+        return;
+    }
+
+    trade.status = "active";
+
+    const requesterSocket = getSocketByUserId(room, trade.requesterUserId);
+    const targetSocket = getSocketByUserId(room, trade.targetUserId);
+
+    const payload = {
+        cmd: "trade_started",
+        content: trade
+    };
+
+    if (requesterSocket) send(requesterSocket, payload);
+    if (targetSocket) send(targetSocket, payload);
+}
+
+function rejectTrade(socket, content) {
+    const room = rooms.get(socket.roomId);
+    if (!room || !room.trades) return;
+
+    const tradeId = String(content?.tradeId || "");
+    const trade = room.trades[tradeId];
+
+    if (!trade) return;
+
+    if (Number(trade.targetUserId) !== Number(socket.userId)) {
+        return;
+    }
+
+    trade.status = "rejected";
+
+    const requesterSocket = getSocketByUserId(room, trade.requesterUserId);
+
+    if (requesterSocket) {
+        send(requesterSocket, {
+            cmd: "trade_rejected",
+            content: trade
+        });
+    }
+
+    delete room.trades[tradeId];
+}
+
+function updateTradeOffer(socket, content) {
+    const room = rooms.get(socket.roomId);
+
+    if (!room || !room.trades || !room.gameState) {
+        return;
+    }
+
+    const tradeId = String(content?.tradeId || "");
+    const trade = room.trades[tradeId];
+
+    if (!trade || trade.status !== "active") {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Troca não está ativa." }
+        });
+        return;
+    }
+
+    const userId = socket.userId;
+
+    if (
+        Number(userId) !== Number(trade.requesterUserId) &&
+        Number(userId) !== Number(trade.targetUserId)
+    ) {
+        return;
+    }
+
+    const item = String(content?.item || "");
+    const amount = Number(content?.amount || 0);
+
+    if (!item || amount < 0) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Item ou quantidade inválida." }
+        });
+        return;
+    }
+
+    const stats = getPlayerStats(room, userId);
+
+    if (amount > 0 && !hasItem(stats, item, amount)) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Você não tem quantidade suficiente desse item." }
+        });
+        return;
+    }
+
+    if (amount === 0) {
+        delete trade.offers[userId][item];
+    } else {
+        trade.offers[userId][item] = amount;
+    }
+
+    trade.confirmed[trade.requesterUserId] = false;
+    trade.confirmed[trade.targetUserId] = false;
+
+    const requesterSocket = getSocketByUserId(room, trade.requesterUserId);
+    const targetSocket = getSocketByUserId(room, trade.targetUserId);
+
+    const payload = {
+        cmd: "trade_updated",
+        content: trade
+    };
+
+    if (requesterSocket) send(requesterSocket, payload);
+    if (targetSocket) send(targetSocket, payload);
+}
+
+function confirmTrade(socket, content) {
+    const room = rooms.get(socket.roomId);
+
+    if (!room || !room.trades || !room.gameState) {
+        return;
+    }
+
+    const tradeId = String(content?.tradeId || "");
+    const trade = room.trades[tradeId];
+
+    if (!trade || trade.status !== "active") {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Troca não está ativa." }
+        });
+        return;
+    }
+
+    const userId = socket.userId;
+
+    if (
+        Number(userId) !== Number(trade.requesterUserId) &&
+        Number(userId) !== Number(trade.targetUserId)
+    ) {
+        return;
+    }
+
+    trade.confirmed[userId] = true;
+
+    const requesterSocket = getSocketByUserId(room, trade.requesterUserId);
+    const targetSocket = getSocketByUserId(room, trade.targetUserId);
+
+    if (!trade.confirmed[trade.requesterUserId] || !trade.confirmed[trade.targetUserId]) {
+        const payload = {
+            cmd: "trade_confirmed_waiting",
+            content: trade
+        };
+
+        if (requesterSocket) send(requesterSocket, payload);
+        if (targetSocket) send(targetSocket, payload);
+
+        return;
+    }
+
+    const statsA = getPlayerStats(room, trade.requesterUserId);
+    const statsB = getPlayerStats(room, trade.targetUserId);
+
+    const offerA = trade.offers[trade.requesterUserId];
+    const offerB = trade.offers[trade.targetUserId];
+
+    for (const item in offerA) {
+        if (!hasItem(statsA, item, offerA[item])) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Um dos jogadores não tem mais os itens necessários." }
+            });
+            return;
+        }
+    }
+
+    for (const item in offerB) {
+        if (!hasItem(statsB, item, offerB[item])) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Um dos jogadores não tem mais os itens necessários." }
+            });
+            return;
+        }
+    }
+
+    for (const item in offerA) {
+        removeItem(statsA, item, offerA[item]);
+        addItem(statsB, item, offerA[item]);
+    }
+
+    for (const item in offerB) {
+        removeItem(statsB, item, offerB[item]);
+        addItem(statsA, item, offerB[item]);
+    }
+
+    trade.status = "completed";
+
+    const payload = {
+        cmd: "trade_completed",
+        content: trade
+    };
+
+    if (requesterSocket) send(requesterSocket, payload);
+    if (targetSocket) send(targetSocket, payload);
+
+    broadcastToRoom(room, {
+        cmd: "game_state_updated",
+        content: {
+            gameState: room.gameState
+        }
+    });
+
+    delete room.trades[tradeId];
+
+    saveRoomState(socket.roomId);
+    saveRoomStateToDb(socket.roomId);
+}
+
 module.exports = {
     rooms,
     loadRoomsFromDb,
     startGameLoop,
+    requestTrade,
+    acceptTrade,
+    rejectTrade,
+    updateTradeOffer,
+    confirmTrade,
     doAction,
     me,
     createRoom,

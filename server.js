@@ -135,6 +135,26 @@ wss.on("connection", (socket) => {
                     rooms.upgradeMilitary(socket, data.content);
                     break;
 
+                case "request_trade":
+                    rooms.requestTrade(socket, content);
+                    break;
+
+                case "accept_trade":
+                    rooms.acceptTrade(socket, content);
+                    break;
+
+                case "reject_trade":
+                    rooms.rejectTrade(socket, content);
+                    break;
+
+                case "update_trade_offer":
+                    rooms.updateTradeOffer(socket, content);
+                    break;
+
+                case "confirm_trade":
+                    rooms.confirmTrade(socket, content);
+                    break;
+
                 default:
                     send(socket, {
                         cmd: "error",
