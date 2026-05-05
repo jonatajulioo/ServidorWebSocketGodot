@@ -66,8 +66,7 @@ wss.on("connection", (socket) => {
 
     socket.on("message", async (message) => {
         let data;
-        const content = data.content || {};
-
+        
         try {
             data = JSON.parse(message.toString());
         } catch {
@@ -77,6 +76,8 @@ wss.on("connection", (socket) => {
             });
             return;
         }
+
+        const content = data.content || {};
 
         try {
             switch (data.cmd) {
