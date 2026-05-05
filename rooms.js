@@ -1606,7 +1606,8 @@ function requestTrade(socket, content) {
         return;
     }
 
-    
+    const requesterPlayer = playerlist.getByUserIdAndRoom(socket.userId, socket.roomId);
+    const targetPlayer = playerlist.getByUserIdAndRoom(targetUserId, socket.roomId);
 
     const targetUserId = Number(content?.targetUserId);
 
