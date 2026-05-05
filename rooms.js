@@ -1606,11 +1606,9 @@ function requestTrade(socket, content) {
         return;
     }
 
-    const requesterPlayer = playerlist.getByUserIdAndRoom(socket.userId, socket.roomId);
-    const targetPlayer = playerlist.getByUserIdAndRoom(targetUserId, socket.roomId);
-
+    
     const targetUserId = Number(content?.targetUserId);
-
+    
     if (!targetUserId || targetUserId === socket.userId) {
         send(socket, {
             cmd: "error",
@@ -1632,7 +1630,10 @@ function requestTrade(socket, content) {
     if (!room.trades) {
         room.trades = {};
     }
-
+    
+    const requesterPlayer = playerlist.getByUserIdAndRoom(socket.userId, socket.roomId);
+    const targetPlayer = playerlist.getByUserIdAndRoom(targetUserId, socket.roomId);
+    
     const tradeId = `${socket.userId}_${targetUserId}_${Date.now()}`;
 
     const trade = {
