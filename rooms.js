@@ -1606,6 +1606,8 @@ function requestTrade(socket, content) {
         return;
     }
 
+    
+
     const targetUserId = Number(content?.targetUserId);
 
     if (!targetUserId || targetUserId === socket.userId) {
@@ -1635,8 +1637,13 @@ function requestTrade(socket, content) {
     const trade = {
         tradeId,
         status: "pending",
+
         requesterUserId: socket.userId,
+        requesterName: requesterPlayer?.name || socket.username,
+
         targetUserId,
+        targetName: targetPlayer?.name || "Jogador",
+
         offers: {
             [socket.userId]: {},
             [targetUserId]: {}
