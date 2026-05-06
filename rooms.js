@@ -983,8 +983,7 @@ function upgradeMilitary(socket, content) {
             return;
         }
     }
-}
-
+    
     if (stats.money < cost) {
         send(socket, {
             cmd: "error",
@@ -1002,7 +1001,8 @@ function upgradeMilitary(socket, content) {
             gameState: room.gameState
         }
     });
-
+}
+    
 
 function handleDisconnect(socket) {
     const roomCode = socket.roomId;
