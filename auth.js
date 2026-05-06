@@ -4,6 +4,7 @@ const { db } = require("./database");
 const { send } = require("./utils");
 
 const activeUsers = new Map();
+const GAME_VERSION = "0.0.1ALPHA";
 
 async function register(socket, content) {
     const username = (content?.username || "").trim();

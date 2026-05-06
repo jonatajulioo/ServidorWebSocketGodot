@@ -1,7 +1,7 @@
 const express = require("express");
 const WebSocket = require("ws");
 const { randomUUID } = require("crypto");
-const GAME_VERSION = "0.0.1ALPHA";
+
 
 const { initDatabase } = require("./database");
 const { send } = require("./utils");
