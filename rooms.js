@@ -802,6 +802,18 @@ async function loadGame(socket, content) {
 }
 
 function upgradeMilitary(socket, content) {
+    const MAX_MILITARY_LEVEL = 7;
+
+    const STRUCTURE_COSTS = {
+        1: { money: 500, ferroBruto: 100 },
+        2: { money: 1000, ferroBruto: 200 },
+        3: { money: 1500, ferroBruto: 350 },
+        4: { money: 2500, ferroBruto: 500 },
+        5: { money: 4000, ferroBruto: 750 },
+        6: { money: 6000, ferroBruto: 1000 },
+        7: { money: 9000, ferroBruto: 1500 }
+    };
+
     const room = rooms.get(socket.roomId);
 
     if (!room || !room.gameState) {
@@ -879,7 +891,99 @@ function upgradeMilitary(socket, content) {
     }
 
     const currentLevel = Number(cat[type] || 0);
+
+    if (currentLevel >= MAX_MILITARY_LEVEL) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Nível máximo atingido." }
+        });
+        return;
+    }
+
     const cost = (currentLevel + 1) * 100;
+
+    if (category === "infantry" && type === "estrutura") {
+        const nextLevel = currentLevel + 1;
+        const cost = STRUCTURE_COSTS[nextLevel];
+
+        if (stats.money < cost.money) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "SquadCoin insuficiente." }
+            });
+            return;
+        }
+
+        if (!stats.inventory) stats.inventory = {};
+        if (Number(stats.inventory.ferroBruto || 0) < cost.ferroBruto) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Ferro insuficiente." }
+            });
+            return;
+        }
+
+        stats.money -= cost.money;
+        stats.inventory.ferroBruto -= cost.ferroBruto;
+        cat[type] = nextLevel;
+
+        broadcastToRoom(room, {
+            cmd: "game_state_updated",
+            content: { gameState: room.gameState }
+    });
+
+        saveRoomState(socket.roomId);
+        saveRoomStateToDb(socket.roomId);
+        return;
+    }
+
+    if (category === "infantry" && type === "guarnicoes") {
+        const estruturaLevel = Number(cat.estrutura || 0);
+
+        if (estruturaLevel <= currentLevel) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Estrutura precisa ser maior que guarnições." }
+            });
+            return;
+        }
+
+        const nextLevel = currentLevel + 1;
+        const cost = nextLevel * 100;
+
+        if (stats.money < cost) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "SquadCoin insuficiente." }
+            });
+            return;
+        }
+
+        stats.money -= cost;
+        cat.guarnicoes = nextLevel;
+
+        stats.troops = nextLevel * 1000;
+
+        broadcastToRoom(room, {
+            cmd: "game_state_updated",
+            content: { gameState: room.gameState }
+        });
+
+        saveRoomState(socket.roomId);
+        saveRoomStateToDb(socket.roomId);
+        return;
+    }
+
+    if (category === "infantry" && type === "armamentos") {
+        if (Number(cat.guarnicoes || 0) <= currentLevel) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Guarnições precisa ser maior que armamentos." }
+            });
+            return;
+        }
+    }
+}
 
     if (stats.money < cost) {
         send(socket, {
@@ -898,7 +1002,7 @@ function upgradeMilitary(socket, content) {
             gameState: room.gameState
         }
     });
-}
+
 
 function handleDisconnect(socket) {
     const roomCode = socket.roomId;
@@ -1633,7 +1737,7 @@ function requestTrade(socket, content) {
     
     const requesterPlayer = playerlist.getByUserIdAndRoom(socket.userId, socket.roomId);
     const targetPlayer = playerlist.getByUserIdAndRoom(targetUserId, socket.roomId);
-    
+
     const tradeId = `${socket.userId}_${targetUserId}_${Date.now()}`;
 
     const trade = {
@@ -1895,10 +1999,82 @@ function confirmTrade(socket, content) {
     saveRoomStateToDb(socket.roomId);
 }
 
+function isPlayerOnline(room, userId) {
+    if (!room || !room.players) {
+        return false;
+    }
+
+    for (const uuid in room.players) {
+        const socket = room.players[uuid];
+
+        if (!socket) {
+            continue;
+        }
+
+        // socket websocket ainda aberto
+        if (socket.readyState !== 1) {
+            continue;
+        }
+
+        if (String(socket.userId) === String(userId)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function getOnlinePlayers(room) {
+    if (!room || !room.players) return [];
+
+    const onlinePlayers = [];
+
+    for (const uuid in room.players) {
+        const socket = room.players[uuid];
+
+        if (!socket || socket.readyState !== 1) continue;
+
+        const player = playerlist.get(uuid);
+        if (!player) continue;
+
+        onlinePlayers.push({
+            uuid: player.uuid,
+            userId: player.userId,
+            name: player.name,
+            country: player.country,
+            color: player.color
+        });
+    }
+
+    return onlinePlayers;
+}
+
+function requestOnlinePlayers(socket) {
+    const room = rooms.get(socket.roomId);
+
+    if (!room) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Sala não encontrada." }
+        });
+        return;
+    }
+
+    send(socket, {
+        cmd: "online_players",
+        content: {
+            players: getOnlinePlayers(room)
+        }
+    });
+}
+
 module.exports = {
     rooms,
     loadRoomsFromDb,
     startGameLoop,
+    getOnlinePlayers,
+    requestOnlinePlayers,
+    isPlayerOnline,
     requestTrade,
     acceptTrade,
     rejectTrade,

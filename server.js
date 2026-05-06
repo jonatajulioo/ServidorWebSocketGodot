@@ -1,6 +1,7 @@
 const express = require("express");
 const WebSocket = require("ws");
 const { randomUUID } = require("crypto");
+const GAME_VERSION = "0.0.1ALPHA";
 
 const { initDatabase } = require("./database");
 const { send } = require("./utils");
@@ -155,6 +156,10 @@ wss.on("connection", (socket) => {
 
                 case "confirm_trade":
                     rooms.confirmTrade(socket, content);
+                    break;
+
+                case "request_online_players":
+                    rooms.requestOnlinePlayers(socket);
                     break;
 
                 default:

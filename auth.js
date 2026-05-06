@@ -49,6 +49,19 @@ async function login(socket, content) {
         [username]
     );
 
+    const clientVersion = String(content?.version || "");
+
+    if (clientVersion !== GAME_VERSION) {
+        send(socket, {
+            cmd: "client_outdated",
+            content: {
+                serverVersion: GAME_VERSION,
+                clientVersion: clientVersion
+            }
+        });
+        return;
+    }
+
     if (res.rows.length === 0) {
         send(socket, {
             cmd: "error",
