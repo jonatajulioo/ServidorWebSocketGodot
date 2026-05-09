@@ -2129,7 +2129,7 @@ function upgradeComercial(socket, content){
         }
 
         if (type === "materialFinalizado") {
-            if (Number(cat.materialBruto || 0) <= currentLevel) {
+            if (cat.materialBruto || 0 <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Material bruto precisa ser maior que material finalizado." }
@@ -2140,7 +2140,7 @@ function upgradeComercial(socket, content){
     }
     if (category === "petroleira"){
         if (type === "armazenamento") {
-            if (Number(cat.estrutura || 0) <= currentLevel) {
+            if (cat.estrutura || 0 <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Estrutura precisa ser maior que armazenamento." }
@@ -2150,7 +2150,7 @@ function upgradeComercial(socket, content){
         }
         
         if (type === "produzidos") {
-            if (Number(cat.armazenamento || 0) <= currentLevel) {
+            if (cat.armazenamento || 0 <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Armazenamento precisa ser maior que produzidos." }
@@ -2161,7 +2161,7 @@ function upgradeComercial(socket, content){
     }
     if (category === "transportadora"){
         if (type === "armazenamento") {
-            if (Number(cat.estrutura || 0) <= currentLevel) {
+            if (cat.estrutura || 0 <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Estrutura precisa ser maior que armazenamento." }
@@ -2171,7 +2171,7 @@ function upgradeComercial(socket, content){
         }
         
         if (type === "transporte") {
-            if (Number(cat.armazenamento || 0) <= currentLevel) {
+            if (cat.armazenamento || 0 <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Armazenamento precisa ser maior que transporte." }
