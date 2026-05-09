@@ -2115,6 +2115,8 @@ function upgradeComercial(socket, content){
     if (!cat[type] && cat[type] !== 0) {
         cat[type] = 0;
     }
+    
+    const currentLevel = cat[type]
 
     //REGRAS PARA SIDERURGICA
     if (category === "siderurgica") {
@@ -2129,7 +2131,7 @@ function upgradeComercial(socket, content){
         }
 
         if (type === "materialFinalizado") {
-            if (cat.materialBruto || 0 <= currentLevel) {
+            if (Number(cat.materialBruto || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Material bruto precisa ser maior que material finalizado." }
@@ -2140,7 +2142,7 @@ function upgradeComercial(socket, content){
     }
     if (category === "petroleira"){
         if (type === "armazenamento") {
-            if (cat.estrutura || 0 <= currentLevel) {
+            if (Number(cat.estrutura || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Estrutura precisa ser maior que armazenamento." }
@@ -2150,7 +2152,7 @@ function upgradeComercial(socket, content){
         }
         
         if (type === "produzidos") {
-            if (cat.armazenamento || 0 <= currentLevel) {
+            if (Number(cat.armazenamento || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Armazenamento precisa ser maior que produzidos." }
@@ -2161,7 +2163,7 @@ function upgradeComercial(socket, content){
     }
     if (category === "transportadora"){
         if (type === "armazenamento") {
-            if (cat.estrutura || 0 <= currentLevel) {
+            if (Number(cat.estrutura || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Estrutura precisa ser maior que armazenamento." }
@@ -2171,7 +2173,7 @@ function upgradeComercial(socket, content){
         }
         
         if (type === "transporte") {
-            if (cat.armazenamento || 0 <= currentLevel) {
+            if (Number(cat.armazenamento || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: { msg: "Armazenamento precisa ser maior que transporte." }
