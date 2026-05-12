@@ -1233,6 +1233,11 @@ function startGameLoop() {
             const players = playerlist.getByRoom(roomCode);
 
             for (const player of players) {
+
+                if (!room.players[player.uuid]) {
+                    continue;
+                }
+
                 const id = player.userId;
 
                 if (!room.gameState.playerStats[id]) {
