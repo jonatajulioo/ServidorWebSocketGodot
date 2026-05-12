@@ -735,7 +735,7 @@ function selectColor(socket, content) {
         };
 
         for (const p of playersInRoom) {
-            room.gameState.playerStats[userId] = createDefaultStats();
+            room.gameState.playerStats[p.userId] = createDefaultStats();
         }
 
         broadcastToRoom(room, {
