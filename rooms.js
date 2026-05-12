@@ -1203,10 +1203,11 @@ function createDefaultStats() {
             }
         },
         inventory: {
-            ferroBruto: 10,
-            ferroRefinado: 5,
-            fruto: 2,
-            petroleo: 5
+            ferroBruto: 0,
+            ferroRefinado: 0,
+            fruto: 0,
+            petroleo: 0,
+            plastico: 0
         },
         money: 1000,
         population: 1000,
@@ -1238,6 +1239,100 @@ function startGameLoop() {
                 }
 
                 const stats = room.gameState.playerStats[id];
+
+                // =========================
+                // PRODUÇÃO DE FERRO BRUTO
+                // =========================
+
+                const materialBrutoLevel = Number(siderurgica.materialBruto || 0);
+
+                if (materialBrutoLevel > 0) {
+
+                    const lastBruto = Number(stats.lastProduction.ferroBruto || 0);
+
+                    if (now - lastBruto >= 5000) {
+
+                        const produzido = materialBrutoLevel * 5;
+
+                        stats.inventory.ferroBruto =
+                            Number(stats.inventory.ferroBruto || 0)
+                            + produzido;
+
+                        stats.lastProduction.ferroBruto = now;
+                    }
+                }
+
+
+                // =========================
+                // PRODUÇÃO DE FERRO REFINADO
+                // =========================
+                if (!stats.inventory) {
+                    stats.inventory = {};
+                }
+
+                if (!stats.comercial) {
+                    stats.comercial = {};
+                }
+
+                const siderurgica = stats.comercial.siderurgica || {};
+                const materialFinalizadoLevel = Number(siderurgica.materialFinalizado || 0);
+
+                if (!stats.lastProduction) {
+                    stats.lastProduction = {};
+                }
+
+                const now = Date.now();
+
+                if (materialFinalizadoLevel > 0) {
+
+                    const last = Number(stats.lastProduction.ferroRefinado || 0);
+
+                    if (now - last >= 5000) {
+
+                        const ferroNecessario = 5 * materialFinalizadoLevel;
+                        const ferroProduzido = materialFinalizadoLevel;
+
+                        if (Number(stats.inventory.ferroBruto || 0) >= ferroNecessario) {
+
+                            stats.inventory.ferroBruto -= ferroNecessario;
+
+                            stats.inventory.ferroRefinado =
+                                Number(stats.inventory.ferroRefinado || 0)
+                                + ferroProduzido;
+
+                            stats.lastProduction.ferroRefinado = now;
+                        }
+                    }
+                }
+
+                // =========================
+                // PRODUÇÃO PETROLEIRA
+                // =========================
+
+                if (produzidosLevel > 0) {
+
+                    const lastPetroleo =
+                        Number(stats.lastProduction.petroleo || 0);
+
+                    if (now - lastPetroleo >= 5000) {
+
+                        const petroleoProduzido =
+                            produzidosLevel * 5;
+
+                        const plasticoProduzido =
+                            produzidosLevel;
+
+                        stats.inventory.petroleo =
+                            Number(stats.inventory.petroleo || 0)
+                            + petroleoProduzido;
+
+                        stats.inventory.plastico =
+                            Number(stats.inventory.plastico || 0)
+                            + plasticoProduzido;
+
+                        stats.lastProduction.petroleo = now;
+                    }
+                }
 
                 let incomePerSecond = 1;
                 let populationPerSecond = 1;
@@ -2086,7 +2181,7 @@ function requestOnlinePlayers(socket) {
 }
 
 function upgradeComercial(socket, content){
-    MAX_LEVEL = 7
+    const MAX_LEVEL = 7
 
     const room = rooms.get(socket.roomId);
     if (!room || room.status !== "playing" || !room.gameState) {
@@ -2115,8 +2210,8 @@ function upgradeComercial(socket, content){
     if (!cat[type] && cat[type] !== 0) {
         cat[type] = 0;
     }
-    
-    const currentLevel = cat[type]
+
+    const currentLevel = Number(cat[type] || 0);
 
     //REGRAS PARA SIDERURGICA
     if (category === "siderurgica") {
@@ -2140,6 +2235,7 @@ function upgradeComercial(socket, content){
             }
         }
     }
+    //REGRAS PARA PETROLEIRA
     if (category === "petroleira"){
         if (type === "armazenamento") {
             if (Number(cat.estrutura || 0) <= currentLevel) {
@@ -2161,6 +2257,7 @@ function upgradeComercial(socket, content){
             }
         }
     }
+    //REGRAS PARA TRANSPORTADORA
     if (category === "transportadora"){
         if (type === "armazenamento") {
             if (Number(cat.estrutura || 0) <= currentLevel) {
@@ -2210,6 +2307,9 @@ function upgradeComercial(socket, content){
             gameState: room.gameState
         }
     });
+
+    saveRoomState(socket.roomId);
+    saveRoomStateToDb(socket.roomId);
 }
 
 module.exports = {
