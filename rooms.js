@@ -1240,95 +1240,60 @@ function startGameLoop() {
 
                 const stats = room.gameState.playerStats[id];
 
-                // =========================
-                // PRODUÇÃO DE FERRO BRUTO
-                // =========================
+                if (!stats.inventory) stats.inventory = {};
+                if (!stats.comercial) stats.comercial = {};
+                if (!stats.lastProduction) stats.lastProduction = {};
+
+                const now = Date.now();
+
+                const siderurgica = stats.comercial.siderurgica || {};
+                const petroleira = stats.comercial.petroleira || {};
 
                 const materialBrutoLevel = Number(siderurgica.materialBruto || 0);
+                const materialFinalizadoLevel = Number(siderurgica.materialFinalizado || 0);
+                const produzidosLevel = Number(petroleira.produzidos || 0);
 
+                // FERRO BRUTO
                 if (materialBrutoLevel > 0) {
-
                     const lastBruto = Number(stats.lastProduction.ferroBruto || 0);
 
                     if (now - lastBruto >= 5000) {
-
-                        const produzido = materialBrutoLevel * 5;
-
                         stats.inventory.ferroBruto =
-                            Number(stats.inventory.ferroBruto || 0)
-                            + produzido;
+                            Number(stats.inventory.ferroBruto || 0) + materialBrutoLevel * 5;
 
                         stats.lastProduction.ferroBruto = now;
                     }
                 }
 
-
-                // =========================
-                // PRODUÇÃO DE FERRO REFINADO
-                // =========================
-                if (!stats.inventory) {
-                    stats.inventory = {};
-                }
-
-                if (!stats.comercial) {
-                    stats.comercial = {};
-                }
-
-                const siderurgica = stats.comercial.siderurgica || {};
-                const materialFinalizadoLevel = Number(siderurgica.materialFinalizado || 0);
-
-                if (!stats.lastProduction) {
-                    stats.lastProduction = {};
-                }
-
-                const now = Date.now();
-
+                // FERRO REFINADO
                 if (materialFinalizadoLevel > 0) {
+                    const lastRefinado = Number(stats.lastProduction.ferroRefinado || 0);
 
-                    const last = Number(stats.lastProduction.ferroRefinado || 0);
-
-                    if (now - last >= 5000) {
-
+                    if (now - lastRefinado >= 5000) {
                         const ferroNecessario = 5 * materialFinalizadoLevel;
                         const ferroProduzido = materialFinalizadoLevel;
 
                         if (Number(stats.inventory.ferroBruto || 0) >= ferroNecessario) {
-
                             stats.inventory.ferroBruto -= ferroNecessario;
 
                             stats.inventory.ferroRefinado =
-                                Number(stats.inventory.ferroRefinado || 0)
-                                + ferroProduzido;
+                                Number(stats.inventory.ferroRefinado || 0) + ferroProduzido;
 
                             stats.lastProduction.ferroRefinado = now;
                         }
                     }
                 }
 
-                // =========================
-                // PRODUÇÃO PETROLEIRA
-                // =========================
-
+                // PETROLEIRA
                 if (produzidosLevel > 0) {
-
-                    const lastPetroleo =
-                        Number(stats.lastProduction.petroleo || 0);
+                    const lastPetroleo = Number(stats.lastProduction.petroleo || 0);
 
                     if (now - lastPetroleo >= 5000) {
-
-                        const petroleoProduzido =
-                            produzidosLevel * 5;
-
-                        const plasticoProduzido =
-                            produzidosLevel;
-
                         stats.inventory.petroleo =
-                            Number(stats.inventory.petroleo || 0)
-                            + petroleoProduzido;
+                            Number(stats.inventory.petroleo || 0) + produzidosLevel * 5;
 
                         stats.inventory.plastico =
-                            Number(stats.inventory.plastico || 0)
-                            + plasticoProduzido;
+                            Number(stats.inventory.plastico || 0) + produzidosLevel;
 
                         stats.lastProduction.petroleo = now;
                     }
