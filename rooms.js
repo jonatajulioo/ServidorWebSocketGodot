@@ -1250,6 +1250,17 @@ function startGameLoop() {
                 const siderurgica = stats.comercial.siderurgica || {};
                 const petroleira = stats.comercial.petroleira || {};
 
+                if (!stats.comercial.petroleira) {
+                    stats.comercial.petroleira = {
+                        armazenamento: 0,
+                        produzidos: 0,
+                        estrutura: 0
+                    };
+                }
+
+                if (!stats.inventory.petroleo) stats.inventory.petroleo = 0;
+                if (!stats.inventory.plastico) stats.inventory.plastico = 0;
+
                 const materialBrutoLevel = Number(siderurgica.materialBruto || 0);
                 const materialFinalizadoLevel = Number(siderurgica.materialFinalizado || 0);
                 const produzidosLevel = Number(petroleira.produzidos || 0);
@@ -1297,6 +1308,10 @@ function startGameLoop() {
                             Number(stats.inventory.plastico || 0) + produzidosLevel;
 
                         stats.lastProduction.petroleo = now;
+
+                        console.log(
+                            `Petroleira ${player.name}: +${produzidosLevel * 5} petróleo, +${produzidosLevel} plástico`
+                        );
                     }
                 }
 
