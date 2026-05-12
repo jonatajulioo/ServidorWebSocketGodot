@@ -1234,7 +1234,9 @@ function startGameLoop() {
 
             for (const player of players) {
 
-                if (!room.players[player.uuid]) {
+                const socketDoPlayer = room.players[player.uuid];
+
+                if (!socketDoPlayer || socketDoPlayer.readyState !== 1) {
                     continue;
                 }
 
