@@ -2350,6 +2350,7 @@ function upgradeComercial(socket, content){
 
     saveRoomState(socket.roomId);
     saveRoomStateToDb(socket.roomId);
+    }
 }
 
 module.exports = {
