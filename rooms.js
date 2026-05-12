@@ -276,9 +276,10 @@ function joinRoom(socket, content) {
         });
         return;
     }
+    
+    roomToJoin.online = true;
 
     if (roomToJoin.status === "offline") {
-        roomToJoin.online = true;
         roomToJoin.status = roomToJoin.statusBeforeOffline || "waiting";
     }
 
@@ -1013,13 +1014,13 @@ function handleDisconnect(socket) {
         return;
     }
 
-    const isHost = room.hostId === socket.userId;
+    const isHost = room.hostId === socket.uuid;
 
     if (isHost) {
         console.log(`Host saiu da sala ${roomCode}, mas a sala continuará existindo.`);
     }
 
-    delete room.players[socket.userId];
+    delete room.players[socket.uuid];
 
     const player = playerlist.get(socket.userId);
 
