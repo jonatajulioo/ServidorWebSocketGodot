@@ -1219,6 +1219,16 @@ function createDefaultStats() {
     };
 }
 
+const PETROLEIRA_CONFIG = {
+    1: { amount: 5, time: 10000 },
+    2: { amount: 7, time: 8000 },
+    3: { amount: 9, time: 6000 },
+    4: { amount: 11, time: 4000 },
+    5: { amount: 13, time: 2000 },
+    6: { amount: 15, time: 2000 },
+    7: { amount: 17, time: 2000 }
+};
+
 function startGameLoop() {
     setInterval(() => {
         for (const [roomCode, room] of rooms.entries()) {
@@ -1305,19 +1315,23 @@ function startGameLoop() {
 
                 // PETROLEIRA
                 if (produzidosLevel > 0) {
+                    const config = PETROLEIRA_CONFIG[produzidosLevel];
+
+                    if (!config) return;
+
                     const lastPetroleo = Number(stats.lastProduction.petroleo || 0);
 
-                    if (now - lastPetroleo >= 5000) {
+                    if (now - lastPetroleo >= config.time) {
                         stats.inventory.petroleo =
-                            Number(stats.inventory.petroleo || 0) + produzidosLevel * 5;
+                            Number(stats.inventory.petroleo || 0) + config.amount;
 
                         stats.inventory.plastico =
-                            Number(stats.inventory.plastico || 0) + produzidosLevel;
+                            Number(stats.inventory.plastico || 0) + Math.floor(config.amount / 5);
 
                         stats.lastProduction.petroleo = now;
 
                         console.log(
-                            `Petroleira ${player.name}: +${produzidosLevel * 5} petróleo, +${produzidosLevel} plástico`
+                            `Petroleira ${player.name}: +${config.amount} petróleo, +${Math.floor(config.amount / 5)} plástico`
                         );
                     }
                 }
@@ -2168,6 +2182,22 @@ function requestOnlinePlayers(socket) {
     });
 }
 
+function getComercialStructureCost(category, nextLevel) {
+    let cost = {
+        money: 100 * Math.pow(2, nextLevel - 1),
+        ferroRefinado: 0
+    };
+
+    if (
+        (category === "siderurgica" || category === "petroleira") &&
+        nextLevel >= 3
+    ) {
+        cost.ferroRefinado = nextLevel * 50;
+    }
+
+    return cost;
+}
+
 function upgradeComercial(socket, content){
     const MAX_LEVEL = 7
 
@@ -2285,9 +2315,31 @@ function upgradeComercial(socket, content){
         });
         return;
     }
+    if (type === "estrutura") {
+        const nextLevel = currentLevel + 1;
+        const cost = getComercialStructureCost(category, nextLevel);
 
-    stats.money -= upgradeCost;
-    cat[type] += 1;
+    if (stats.money < cost.money) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Dinheiro insuficiente para upgrade." }
+        });
+        return;
+    }
+
+    if (!stats.inventory) stats.inventory = {};
+
+    if (Number(stats.inventory.ferroRefinado || 0) < cost.ferroRefinado) {
+        send(socket, {
+            cmd: "error",
+            content: { msg: "Ferro refinado insuficiente para melhorar a estrutura." }
+        });
+        return;
+    }
+
+    stats.money -= cost.money;
+    stats.inventory.ferroRefinado -= cost.ferroRefinado;
+    cat[type] = nextLevel;
 
     broadcastToRoom(room, {
         cmd: "game_state_updated",
