@@ -2291,6 +2291,8 @@ function upgradeComercial(socket, content){
             return;
         }
     }
+    const cost = getComercialStructureCost(category, nextLevel);
+
     stats.money -= cost.money;
     stats.inventory.ferroRefinado -= cost.ferroRefinado;
     cat[type] = nextLevel;
