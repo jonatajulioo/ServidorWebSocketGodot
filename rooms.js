@@ -806,13 +806,13 @@ function upgradeMilitary(socket, content) {
     const MAX_MILITARY_LEVEL = 7;
 
     const STRUCTURE_COSTS = {
-        1: { money: 500, ferroBruto: 100 },
-        2: { money: 1000, ferroBruto: 200 },
-        3: { money: 1500, ferroBruto: 350 },
-        4: { money: 2500, ferroBruto: 500 },
-        5: { money: 4000, ferroBruto: 750 },
-        6: { money: 6000, ferroBruto: 1000 },
-        7: { money: 9000, ferroBruto: 1500 }
+        1: { money: 500, ferroRefinado: 100 },
+        2: { money: 1000, ferroRefinado: 200 },
+        3: { money: 1500, ferroRefinado: 350 },
+        4: { money: 2500, ferroRefinado: 500 },
+        5: { money: 4000, ferroRefinado: 750 },
+        6: { money: 6000, ferroRefinado: 1000 },
+        7: { money: 9000, ferroRefinado: 1500 }
     };
 
     const room = rooms.get(socket.roomId);
