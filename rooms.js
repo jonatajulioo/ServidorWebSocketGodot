@@ -2152,10 +2152,11 @@ function getComercialStructureCost(category, nextLevel) {
     return cost;
 }
 
-function upgradeComercial(socket, content){
-    const MAX_LEVEL = 7
+function upgradeComercial(socket, content) {
+    const MAX_LEVEL = 7;
 
     const room = rooms.get(socket.roomId);
+
     if (!room || room.status !== "playing" || !room.gameState) {
         send(socket, {
             cmd: "error",
@@ -2166,9 +2167,9 @@ function upgradeComercial(socket, content){
 
     const category = String(content?.category || "");
     const type = String(content?.type || "");
-    
+
     const stats = getPlayerStats(room, socket.userId);
-    
+
     if (!stats.comercial) {
         stats.comercial = {};
     }
@@ -2179,19 +2180,24 @@ function upgradeComercial(socket, content){
 
     const cat = stats.comercial[category];
 
-    if (!cat[type] && cat[type] !== 0) {
+    if (cat[type] === undefined) {
         cat[type] = 0;
     }
 
     const currentLevel = Number(cat[type] || 0);
 
-    //REGRAS PARA SIDERURGICA
+    // =========================
+    // REGRAS SIDERÚRGICA
+    // =========================
     if (category === "siderurgica") {
+
         if (type === "materialBruto") {
             if (Number(cat.estrutura || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
-                    content: { msg: "Estrutura precisa ser maior que material bruto." }
+                    content: {
+                        msg: "Estrutura precisa ser maior que material bruto."
+                    }
                 });
                 return;
             }
@@ -2201,101 +2207,150 @@ function upgradeComercial(socket, content){
             if (Number(cat.materialBruto || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
-                    content: { msg: "Material bruto precisa ser maior que material finalizado." }
+                    content: {
+                        msg: "Material bruto precisa ser maior que material finalizado."
+                    }
                 });
                 return;
             }
         }
     }
-    //REGRAS PARA PETROLEIRA
-    if (category === "petroleira"){
+
+    // =========================
+    // REGRAS PETROLEIRA
+    // =========================
+    if (category === "petroleira") {
+
         if (type === "armazenamento") {
             if (Number(cat.estrutura || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
-                    content: { msg: "Estrutura precisa ser maior que armazenamento." }
+                    content: {
+                        msg: "Estrutura precisa ser maior que armazenamento."
+                    }
                 });
                 return;
             }
         }
-        
+
         if (type === "produzidos") {
             if (Number(cat.armazenamento || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
-                    content: { msg: "Armazenamento precisa ser maior que produzidos." }
+                    content: {
+                        msg: "Armazenamento precisa ser maior que produzidos."
+                    }
                 });
                 return;
             }
         }
     }
-    //REGRAS PARA TRANSPORTADORA
-    if (category === "transportadora"){
+
+    // =========================
+    // REGRAS TRANSPORTADORA
+    // =========================
+    if (category === "transportadora") {
+
         if (type === "armazenamento") {
             if (Number(cat.estrutura || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
-                    content: { msg: "Estrutura precisa ser maior que armazenamento." }
+                    content: {
+                        msg: "Estrutura precisa ser maior que armazenamento."
+                    }
                 });
                 return;
             }
         }
-        
+
         if (type === "transporte") {
             if (Number(cat.armazenamento || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
-                    content: { msg: "Armazenamento precisa ser maior que transporte." }
+                    content: {
+                        msg: "Armazenamento precisa ser maior que transporte."
+                    }
                 });
                 return;
             }
         }
     }
-    
-    if (cat[type] >= MAX_LEVEL) {
-        send(socket, {
-            cmd: "error",
-            content: { msg: "Nível máximo atingido para essa categoria." }
-        });
-        return;
-    }
-    // CUSTO DE UPGRADE: 100 * (2 ^ nível atual)
-    const upgradeCost = 100 * Math.pow(2, cat[type]);
 
-    if (stats.money < upgradeCost) {
+    // =========================
+    // MAX LEVEL
+    // =========================
+    if (currentLevel >= MAX_LEVEL) {
         send(socket, {
             cmd: "error",
-            content: { msg: "Dinheiro insuficiente para upgrade." }
+            content: {
+                msg: "Nível máximo atingido."
+            }
         });
         return;
     }
+
+    // =========================
+    // UPGRADE ESTRUTURA
+    // =========================
     if (type === "estrutura") {
+
         const nextLevel = currentLevel + 1;
         const cost = getComercialStructureCost(category, nextLevel);
 
         if (stats.money < cost.money) {
             send(socket, {
                 cmd: "error",
-                content: { msg: "Dinheiro insuficiente para upgrade." }
+                content: {
+                    msg: "Dinheiro insuficiente."
+                }
             });
             return;
         }
 
-        if (!stats.inventory) stats.inventory = {};
+        if (!stats.inventory) {
+            stats.inventory = {};
+        }
 
-        if (Number(stats.inventory.ferroRefinado || 0) < cost.ferroRefinado) {
+        if (
+            Number(stats.inventory.ferroRefinado || 0)
+            < cost.ferroRefinado
+        ) {
             send(socket, {
                 cmd: "error",
-                content: { msg: "Ferro refinado insuficiente para melhorar a estrutura." }
+                content: {
+                    msg: "Ferro refinado insuficiente."
+                }
             });
             return;
         }
-    }
-    const cost = getComercialStructureCost(category, nextLevel);
 
-    stats.money -= cost.money;
-    stats.inventory.ferroRefinado -= cost.ferroRefinado;
-    cat[type] = nextLevel;
+        stats.money -= cost.money;
+        stats.inventory.ferroRefinado -= cost.ferroRefinado;
+
+        cat[type] = nextLevel;
+
+    } else {
+
+        // =========================
+        // UPGRADE NORMAL
+        // =========================
+
+        const upgradeCost = 100 * Math.pow(2, currentLevel);
+
+        if (stats.money < upgradeCost) {
+            send(socket, {
+                cmd: "error",
+                content: {
+                    msg: "Dinheiro insuficiente para upgrade."
+                }
+            });
+            return;
+        }
+
+        stats.money -= upgradeCost;
+
+        cat[type] += 1;
+    }
 
     broadcastToRoom(room, {
         cmd: "game_state_updated",
@@ -2306,7 +2361,6 @@ function upgradeComercial(socket, content){
 
     saveRoomState(socket.roomId);
     saveRoomStateToDb(socket.roomId);
-    
 }
 
 module.exports = {
