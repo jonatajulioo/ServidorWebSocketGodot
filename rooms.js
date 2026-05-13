@@ -951,6 +951,7 @@ function upgradeMilitary(socket, content) {
 
         const nextLevel = currentLevel + 1;
         const cost = nextLevel * 100;
+        
 
         if (stats.money < cost) {
             send(socket, {
@@ -1229,6 +1230,16 @@ const PETROLEIRA_CONFIG = {
     7: { amount: 17, time: 2000 }
 };
 
+function getSiderurgicaSpeed(level) {
+    if (level <= 1) return 10000; // normal: 10s
+    if (level === 2) return 6666; // 1.5x mais rápido
+    if (level === 3) return 5000; // 2x
+    if (level === 4) return 4000;
+    if (level === 5) return 3000;
+    if (level === 6) return 2500;
+    return 2000;
+}
+
 function startGameLoop() {
     setInterval(() => {
         for (const [roomCode, room] of rooms.entries()) {
@@ -1282,24 +1293,15 @@ function startGameLoop() {
                 const materialFinalizadoLevel = Number(siderurgica.materialFinalizado || 0);
                 const produzidosLevel = Number(petroleira.produzidos || 0);
 
-                // FERRO BRUTO
-                if (materialBrutoLevel > 0) {
-                    const lastBruto = Number(stats.lastProduction.ferroBruto || 0);
-
-                    if (now - lastBruto >= 5000) {
-                        stats.inventory.ferroBruto =
-                            Number(stats.inventory.ferroBruto || 0) + materialBrutoLevel * 5;
-
-                        stats.lastProduction.ferroBruto = now;
-                    }
-                }
+                
 
                 // FERRO REFINADO
-                if (materialFinalizadoLevel > 0) {
-                    const lastRefinado = Number(stats.lastProduction.ferroRefinado || 0);
+                if (materialBrutoLevel > 0 && materialFinalizadoLevel > 0) {
+                    const lastRefino = Number(stats.lastProduction.ferroRefinado || 0);
+                    const tempo = getSiderurgicaSpeed(materialBrutoLevel);
 
-                    if (now - lastRefinado >= 5000) {
-                        const ferroNecessario = 5 * materialFinalizadoLevel;
+                    if (now - lastRefino >= tempo) {
+                        const ferroNecessario = 5;
                         const ferroProduzido = materialFinalizadoLevel;
 
                         if (Number(stats.inventory.ferroBruto || 0) >= ferroNecessario) {
@@ -1315,24 +1317,21 @@ function startGameLoop() {
 
                 // PETROLEIRA
                 if (produzidosLevel > 0) {
-                    const config = PETROLEIRA_CONFIG[produzidosLevel];
+                    const lastPetroleira = Number(stats.lastProduction.petroleira || 0);
 
-                    if (!config) return;
+                    if (now - lastPetroleira >= 10000) {
+                        const produzido = produzidosLevel;
 
-                    const lastPetroleo = Number(stats.lastProduction.petroleo || 0);
+                        stats.inventory.ferroBruto =
+                            Number(stats.inventory.ferroBruto || 0) + produzido;
 
-                    if (now - lastPetroleo >= config.time) {
                         stats.inventory.petroleo =
-                            Number(stats.inventory.petroleo || 0) + config.amount;
+                            Number(stats.inventory.petroleo || 0) + produzido;
 
                         stats.inventory.plastico =
-                            Number(stats.inventory.plastico || 0) + Math.floor(config.amount / 5);
+                            Number(stats.inventory.plastico || 0) + produzido;
 
-                        stats.lastProduction.petroleo = now;
-
-                        console.log(
-                            `Petroleira ${player.name}: +${config.amount} petróleo, +${Math.floor(config.amount / 5)} plástico`
-                        );
+                        stats.lastProduction.petroleira = now;
                     }
                 }
 
