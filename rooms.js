@@ -2318,24 +2318,24 @@ function upgradeComercial(socket, content){
         const nextLevel = currentLevel + 1;
         const cost = getComercialStructureCost(category, nextLevel);
 
-    if (stats.money < cost.money) {
-        send(socket, {
-            cmd: "error",
-            content: { msg: "Dinheiro insuficiente para upgrade." }
-        });
-        return;
+        if (stats.money < cost.money) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Dinheiro insuficiente para upgrade." }
+            });
+            return;
+        }
+
+        if (!stats.inventory) stats.inventory = {};
+
+        if (Number(stats.inventory.ferroRefinado || 0) < cost.ferroRefinado) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Ferro refinado insuficiente para melhorar a estrutura." }
+            });
+            return;
+        }
     }
-
-    if (!stats.inventory) stats.inventory = {};
-
-    if (Number(stats.inventory.ferroRefinado || 0) < cost.ferroRefinado) {
-        send(socket, {
-            cmd: "error",
-            content: { msg: "Ferro refinado insuficiente para melhorar a estrutura." }
-        });
-        return;
-    }
-
     stats.money -= cost.money;
     stats.inventory.ferroRefinado -= cost.ferroRefinado;
     cat[type] = nextLevel;
@@ -2349,7 +2349,7 @@ function upgradeComercial(socket, content){
 
     saveRoomState(socket.roomId);
     saveRoomStateToDb(socket.roomId);
-    }
+    
 }
 
 module.exports = {
