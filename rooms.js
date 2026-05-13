@@ -1118,51 +1118,6 @@ async function loadRoomsFromDb() {
     }
 }
 
-async function loadRoomsFromDb() {
-    try {
-        const res = await db.query("SELECT save_data FROM saves");
-
-        for (const row of res.rows) {
-            const savedRoom = JSON.parse(row.save_data);
-            const roomCode = savedRoom.roomCode;
-
-            if (!roomCode || rooms.has(roomCode)) {
-                continue;
-            }
-
-            rooms.set(roomCode, {
-                players: {},
-                hostId: savedRoom.hostId,
-                hostUserId: savedRoom.hostUserId,
-                status: savedRoom.status || "offline",
-                statusBeforeOffline: savedRoom.statusBeforeOffline || savedRoom.status || "waiting",
-                online: false,
-                selectedCountries: savedRoom.selectedCountries || {},
-                selectedColors: savedRoom.selectedColors || {},
-                gameState: savedRoom.gameState || null,
-                createdAt: savedRoom.createdAt || Date.now(),
-                chat: savedRoom.chat || []
-            });
-
-            if (Array.isArray(savedRoom.players)) {
-                for (const p of savedRoom.players) {
-                    playerlist.addExisting({
-                        ...p,
-                        room: roomCode,
-                        offline: true
-                    });
-                }
-            }
-
-            console.log(`Sala ${roomCode} carregada do PostgreSQL.`);
-        }
-
-        console.log(`${res.rows.length} saves verificados no PostgreSQL.`);
-    } catch (err) {
-        console.error("Erro ao carregar salas do PostgreSQL:", err);
-    }
-}
-
 function createDefaultStats() {
     return {
         military: {
