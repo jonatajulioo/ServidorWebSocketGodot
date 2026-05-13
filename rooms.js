@@ -1256,7 +1256,7 @@ function startGameLoop() {
                     const tempo = getSiderurgicaSpeed(materialBrutoLevel);
 
                     if (now - lastRefino >= tempo) {
-                        const ferroNecessario = 5;
+                        const ferroNecessario = 2;
                         const ferroProduzido = materialFinalizadoLevel;
 
                         if (Number(stats.inventory.ferroBruto || 0) >= ferroNecessario) {
@@ -2146,7 +2146,7 @@ function getComercialStructureCost(category, nextLevel) {
         (category === "siderurgica" || category === "petroleira") &&
         nextLevel >= 3
     ) {
-        cost.ferroRefinado = nextLevel * 50;
+        cost.ferroRefinado = nextLevel * 2;
     }
 
     return cost;
@@ -2311,10 +2311,8 @@ function upgradeComercial(socket, content) {
             stats.inventory = {};
         }
 
-        if (
-            Number(stats.inventory.ferroRefinado || 0)
-            < cost.ferroRefinado
-        ) {
+        if (Number(stats.inventory.ferroRefinado || 0)< cost.ferroRefinado) {
+            console.log("é necessario " + cost.ferroRefinado + " de ferro refinado para esse upgrade, mas o jogador só tem " + stats.inventory.ferroRefinado);
             send(socket, {
                 cmd: "error",
                 content: {
