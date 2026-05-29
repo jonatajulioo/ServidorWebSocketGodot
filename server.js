@@ -142,6 +142,10 @@ wss.on("connection", (socket) => {
                     rooms.upgradeComercial(socket, data.content);
                     break;
 
+                case "upgrade_saude":
+                    rooms.upgradeSaude(socket, data.content);
+                    break;
+
                 case "request_trade":
                     rooms.requestTrade(socket, content);
                     break;

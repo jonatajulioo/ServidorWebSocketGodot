@@ -1159,6 +1159,11 @@ function createDefaultStats() {
                 estrutura: 0
             }
         },
+        saude: {
+            saneamentoBasico: 0,
+            hospitais: 0,
+            laboratorios: 0
+        },
         inventory: {
             ferroBruto: 0,
             ferroRefinado: 0,
@@ -2361,6 +2366,75 @@ function upgradeComercial(socket, content) {
     saveRoomStateToDb(socket.roomId);
 }
 
+function upgradeSaude(socket, content){
+        const room = rooms.get(socket.roomId);
+        if (!room || room.status !== "playing" || !room.gameState) {
+            send(socket, {
+                cmd: "error",
+                content: { msg: "Jogo não iniciado." }
+            });
+            return;
+        }
+        
+        const category = String(content?.category || "");
+        const type = String(content?.type || "");
+
+        const stats = getPlayerStats(room, socket.userId);
+        
+        if (!stats.saude) {
+            stats.saude = {};
+        }
+
+        const cat = stats.saude[category];
+
+        if (cat === undefined) {
+            cat = {
+                saneamentoBasico: 0,
+                hospitais: 0,
+                laboratorios: 0
+            };
+        }
+
+        if (cat[type] === undefined) {
+            cat[type] = 0;
+        }
+
+        const currentLevel = Number(cat[type] || 0);
+        const MAX_LEVEL = 7;
+
+        if (currentLevel >= MAX_LEVEL) {
+            send(socket, {
+                cmd: "error",
+                content: {
+                    msg: "Nível máximo atingido."
+                }
+            });
+            return;
+        }
+
+        const upgradeCost = 150 * Math.pow(2, currentLevel);
+
+        if (stats.money < upgradeCost) {
+            send(socket, {
+                cmd: "error",
+                content: {
+                    msg: "Dinheiro insuficiente para upgrade."
+                }
+            });
+            return;
+        }
+
+        stats.money -= upgradeCost;
+        cat[type] += 1;
+
+        broadcastToRoom(room, {
+            cmd: "game_state_updated",
+            content: {
+                gameState: room.gameState
+            }
+        });
+
+}
 module.exports = {
     rooms,
     loadRoomsFromDb,
@@ -2386,5 +2460,6 @@ module.exports = {
     loadGame,
     upgradeMilitary,
     upgradeComercial,
+    upgradeSaude,
     handleDisconnect
 };
