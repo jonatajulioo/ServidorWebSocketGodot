@@ -94,6 +94,13 @@ wss.on("connection", (socket) => {
                     rooms.me(socket);
                     break;
 
+                case "heartbeat_ping":
+                    send(socket, {
+                        cmd: "heartbeat_pong",
+                        content: { time: Date.now() }
+                    });
+                    break;
+
                 case "create_room":
                     rooms.createRoom(socket);
                     break;
