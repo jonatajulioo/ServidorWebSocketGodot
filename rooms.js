@@ -2387,11 +2387,11 @@ function upgradeSaude(socket, content){
             stats.saude = {};
         }
 
-        const cat = stats.saude[category];
-
-        if (cat[type] === undefined) {
-            cat[type] = 0;
+        if (!stats.saude[category]) {
+            stats.saude[category] = {};
         }
+
+        const cat = stats.saude[category];
 
         if (cat[type] === undefined) {
             cat[type] = 0;
