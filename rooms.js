@@ -194,6 +194,104 @@ async function saveRoomStateToDb(roomCode) {
     }
 }
 
+async function deleteRoomSave(roomCode) {
+    const filePath = path.join(SAVE_DIR, `${roomCode}.json`);
+
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`Save JSON da sala ${roomCode} apagado.`);
+        }
+    } catch (err) {
+        console.error(`Erro ao apagar save JSON da sala ${roomCode}:`, err.message);
+    }
+
+    try {
+        await db.query("DELETE FROM saves WHERE room_code = $1", [roomCode]);
+        console.log(`Save PostgreSQL da sala ${roomCode} apagado.`);
+    } catch (err) {
+        console.error(`Erro ao apagar save PostgreSQL da sala ${roomCode}:`, err.message);
+    }
+}
+
+function getVictoryInfo(room, roomCode) {
+    if (!room || !room.gameState || !room.gameState.territories) {
+        return null;
+    }
+
+    const players = Array.isArray(room.gameState.players)
+        ? room.gameState.players
+        : playerlist.getByRoom(roomCode);
+
+    if (players.length <= 1) {
+        return null;
+    }
+
+    const ownerIds = new Set();
+
+    for (const territory of Object.values(room.gameState.territories)) {
+        if (!territory || territory.ownerUserId === undefined || territory.ownerUserId === null) {
+            continue;
+        }
+
+        ownerIds.add(String(territory.ownerUserId));
+    }
+
+    if (ownerIds.size !== 1) {
+        return null;
+    }
+
+    const winnerUserId = [...ownerIds][0];
+    const winner = players.find((player) => String(player.userId) === winnerUserId);
+
+    return {
+        winnerUserId,
+        winnerName: winner?.name || "Jogador"
+    };
+}
+
+function finishRoomByVictory(roomCode, winnerInfo) {
+    const room = rooms.get(roomCode);
+
+    if (!room || room.finished === true) {
+        return;
+    }
+
+    room.finished = true;
+    room.status = "finished";
+
+    addRoomEvent(room, "victory", `${winnerInfo.winnerName} venceu a partida.`, winnerInfo);
+
+    broadcastToRoom(room, {
+        cmd: "room_closed",
+        content: {
+            reason: "victory",
+            winnerUserId: winnerInfo.winnerUserId,
+            winnerName: winnerInfo.winnerName,
+            msg: "Partida encerrada por vitoria."
+        }
+    });
+
+    setTimeout(() => {
+        const roomToDelete = rooms.get(roomCode);
+
+        if (!roomToDelete) {
+            return;
+        }
+
+        for (const clientUuid in roomToDelete.players) {
+            if (roomToDelete.players[clientUuid]) {
+                roomToDelete.players[clientUuid].roomId = null;
+            }
+        }
+
+        rooms.delete(roomCode);
+        playerlist.removeByRoom(roomCode);
+        deleteRoomSave(roomCode);
+        console.log(`Sala ${roomCode} apagada apos vitoria de ${winnerInfo.winnerName}.`);
+    }, 1500);
+}
+
 async function loadRoomStateFromDb(roomCode) {
     const res = await db.query(
         "SELECT save_data FROM saves WHERE room_code = $1",
@@ -1210,6 +1308,7 @@ function createDefaultStats() {
             },
             petroleira: {
                 armazenamento: 0,
+                produzido: 0,
                 produzidos: 0,
                 estrutura: 0
             },
@@ -1262,6 +1361,30 @@ function getSiderurgicaSpeed(level) {
     return 2000;
 }
 
+function normalizePetroleiraStats(petroleira) {
+    if (!petroleira) {
+        return {
+            armazenamento: 0,
+            produzido: 0,
+            produzidos: 0,
+            estrutura: 0
+        };
+    }
+
+    const producedLevel = Math.max(
+        Number(petroleira.produzido || 0),
+        Number(petroleira.produzidos || 0)
+    );
+
+    petroleira.produzido = producedLevel;
+    petroleira.produzidos = producedLevel;
+
+    if (petroleira.armazenamento === undefined) petroleira.armazenamento = 0;
+    if (petroleira.estrutura === undefined) petroleira.estrutura = 0;
+
+    return petroleira;
+}
+
 function startGameLoop() {
     setInterval(() => {
         for (const [roomCode, room] of rooms.entries()) {
@@ -1298,11 +1421,13 @@ function startGameLoop() {
                 const now = Date.now();
 
                 const siderurgica = stats.comercial.siderurgica || {};
-                const petroleira = stats.comercial.petroleira || {};
+                const petroleira = normalizePetroleiraStats(stats.comercial.petroleira);
+                stats.comercial.petroleira = petroleira;
 
                 if (!stats.comercial.petroleira) {
                     stats.comercial.petroleira = {
                         armazenamento: 0,
+                        produzido: 0,
                         produzidos: 0,
                         estrutura: 0
                     };
@@ -1313,7 +1438,7 @@ function startGameLoop() {
 
                 const materialBrutoLevel = Number(siderurgica.materialBruto || 0);
                 const materialFinalizadoLevel = Number(siderurgica.materialFinalizado || 0);
-                const produzidosLevel = Number(petroleira.produzidos || 0);
+                const produzidosLevel = Number(petroleira.produzido || petroleira.produzidos || 0);
 
                 
 
@@ -1459,8 +1584,16 @@ function doAction(socket, content) {
         }
     });
 
-    saveRoomState(socket.roomId);
-    saveRoomStateToDb(socket.roomId);
+    const victoryInfo = getVictoryInfo(room, socket.roomId);
+    if (victoryInfo) {
+        finishRoomByVictory(socket.roomId, victoryInfo);
+        return;
+    }
+
+    if (room.finished !== true) {
+        saveRoomState(socket.roomId);
+        saveRoomStateToDb(socket.roomId);
+    }
 }
 
 function getPlayerStats(room, userId) {
@@ -2330,7 +2463,11 @@ function upgradeComercial(socket, content) {
     }
 
     const category = String(content?.category || "");
-    const type = String(content?.type || "");
+    let type = String(content?.type || "");
+
+    if (category === "petroleira" && type === "produzidos") {
+        type = "produzido";
+    }
 
     const stats = getPlayerStats(room, socket.userId);
 
@@ -2342,7 +2479,11 @@ function upgradeComercial(socket, content) {
         stats.comercial[category] = {};
     }
 
-    const cat = stats.comercial[category];
+    const cat = category === "petroleira"
+        ? normalizePetroleiraStats(stats.comercial[category])
+        : stats.comercial[category];
+
+    stats.comercial[category] = cat;
 
     if (cat[type] === undefined) {
         cat[type] = 0;
@@ -2397,12 +2538,12 @@ function upgradeComercial(socket, content) {
             }
         }
 
-        if (type === "produzidos") {
+        if (type === "produzido") {
             if (Number(cat.armazenamento || 0) <= currentLevel) {
                 send(socket, {
                     cmd: "error",
                     content: {
-                        msg: "Armazenamento precisa ser maior que produzidos."
+                        msg: "Armazenamento precisa ser maior que produzido."
                     }
                 });
                 return;
@@ -2512,6 +2653,10 @@ function upgradeComercial(socket, content) {
         stats.money -= upgradeCost;
 
         cat[type] += 1;
+
+        if (category === "petroleira" && type === "produzido") {
+            cat.produzidos = cat.produzido;
+        }
     }
 
     broadcastToRoom(room, {
