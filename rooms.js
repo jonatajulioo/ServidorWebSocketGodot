@@ -1160,9 +1160,11 @@ function createDefaultStats() {
             }
         },
         saude: {
-            saneamentoBasico: 0,
-            hospitais: 0,
-            laboratorios: 0
+            infraestuturaMedica: {
+                saneamentoBasico: 0,
+                hospitais: 0,
+                laboratorios: 0
+            }
         },
         inventory: {
             ferroBruto: 0,
