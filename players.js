@@ -26,7 +26,10 @@ const playerlist = {
             room: roomCode,
             name: playerName,
             country: null,
-            color: null
+            color: null,
+            offline: false,
+            disconnectedAt: null,
+            protectedUntil: null
         };
 
         this.players.push(player);
@@ -58,7 +61,9 @@ const playerlist = {
         name: playerData.name,
         country: playerData.country || null,
         color: playerData.color || null,
-        offline: true
+        offline: playerData.offline !== false,
+        disconnectedAt: playerData.disconnectedAt || null,
+        protectedUntil: playerData.protectedUntil || null
     };
 
     this.players.push(player);

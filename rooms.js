@@ -8,6 +8,8 @@ const { send, generateRoomCode, requireAuth } = require("./utils");
 const rooms = new Map();
 
 const SAVE_DIR = path.join(__dirname, "saves");
+const DISCONNECT_PROTECTION_MS = 2 * 60 * 1000;
+const MAX_EVENT_HISTORY = 80;
 if (!fs.existsSync(SAVE_DIR)) {
     fs.mkdirSync(SAVE_DIR, { recursive: true });
 }
@@ -16,6 +18,36 @@ function broadcastToRoom(room, payload) {
     for (const clientUuid in room.players) {
         send(room.players[clientUuid], payload);
     }
+}
+
+function addRoomEvent(room, type, text, data = {}) {
+    if (!room) return;
+
+    if (!Array.isArray(room.eventHistory)) {
+        room.eventHistory = [];
+    }
+
+    const event = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        time: Date.now(),
+        type,
+        text,
+        data
+    };
+
+    room.eventHistory.push(event);
+
+    if (room.eventHistory.length > MAX_EVENT_HISTORY) {
+        room.eventHistory = room.eventHistory.slice(-MAX_EVENT_HISTORY);
+    }
+
+    broadcastToRoom(room, {
+        cmd: "event_history_updated",
+        content: {
+            event,
+            events: room.eventHistory
+        }
+    });
 }
 
 function getRoomByCode(roomCode) {
@@ -37,7 +69,10 @@ function getSerializablePlayers(roomCode) {
         room: player.room,
         name: player.name,
         country: player.country || null,
-        color: player.color || null
+        color: player.color || null,
+        offline: player.offline === true,
+        disconnectedAt: player.disconnectedAt || null,
+        protectedUntil: player.protectedUntil || null
     }));
 }
 
@@ -53,6 +88,7 @@ function buildRoomState(roomCode) {
         players: getSerializablePlayers(roomCode),
         countries_taken: getCountriesArray(room.selectedCountries),
         colors_taken: getColorsArray(room.selectedColors),
+        eventHistory: room.eventHistory || [],
         gameState: room.gameState
     };
 }
@@ -108,6 +144,7 @@ function saveRoomState(roomCode) {
         selectedColors: room.selectedColors,
         gameState: room.gameState,
         chat: room.chat || [],
+        eventHistory: room.eventHistory || [],
         createdAt: room.createdAt,
         savedAt: Date.now(),
         players: getSerializablePlayers(roomCode)
@@ -132,6 +169,7 @@ async function saveRoomStateToDb(roomCode) {
         selectedColors: room.selectedColors,
         gameState: room.gameState,
         chat: room.chat || [],
+        eventHistory: room.eventHistory || [],
         createdAt: room.createdAt,
         savedAt: Date.now(),
         players: getSerializablePlayers(roomCode)
@@ -228,7 +266,8 @@ function createRoom(socket) {
         selectedColors: {},
         gameState: null,
         createdAt: Date.now(),
-        chat: []
+        chat: [],
+        eventHistory: []
     });
 
     const room = rooms.get(newRoomId);
@@ -305,6 +344,13 @@ function joinRoom(socket, content) {
 
         oldPlayer.uuid = socket.uuid;
         oldPlayer.offline = false;
+        oldPlayer.disconnectedAt = null;
+        oldPlayer.protectedUntil = null;
+
+        addRoomEvent(roomToJoin, "player_reconnected", `${playerName} reconectou.`, {
+            userId: socket.userId,
+            name: playerName
+        });
 
         socket.roomId = roomCode;
         roomToJoin.players[socket.uuid] = socket;
@@ -739,6 +785,8 @@ function selectColor(socket, content) {
             room.gameState.playerStats[p.userId] = createDefaultStats();
         }
 
+        addRoomEvent(room, "game_started", "Partida iniciada.", {});
+
         broadcastToRoom(room, {
             cmd: "go_to_map",
             content: buildRoomState(socket.roomId)
@@ -1011,7 +1059,7 @@ function handleDisconnect(socket) {
     const room = rooms.get(roomCode);
 
     if (!room) {
-        playerlist.remove(socket.userId);
+        playerlist.remove(socket.uuid);
         return;
     }
 
@@ -1023,24 +1071,31 @@ function handleDisconnect(socket) {
 
     delete room.players[socket.uuid];
 
-    const player = playerlist.get(socket.userId);
+    const player = playerlist.getByUserIdAndRoom(socket.userId, roomCode);
 
     if (room.status !== "playing") {
-        if (player && player.country && room.selectedCountries[player.country] === socket.userId) {
+        if (player && player.country && room.selectedCountries[player.country] === socket.uuid) {
             delete room.selectedCountries[player.country];
         }
 
-        if (player && player.color && room.selectedColors[player.color] === socket.userId) {
+        if (player && player.color && room.selectedColors[player.color] === socket.uuid) {
             delete room.selectedColors[player.color];
         }
     }
 
     if (room.status !== "playing") {
-        playerlist.remove(socket.userId);
+        playerlist.remove(socket.uuid);
     } else {
-        const player = playerlist.get(socket.userId);
+        const player = playerlist.getByUserIdAndRoom(socket.userId, roomCode);
         if (player) {
             player.offline = true;
+            player.disconnectedAt = Date.now();
+            player.protectedUntil = Date.now() + DISCONNECT_PROTECTION_MS;
+            addRoomEvent(room, "player_disconnected", `${player.name} desconectou.`, {
+                userId: player.userId,
+                name: player.name,
+                protectedUntil: player.protectedUntil
+            });
         }
     }
 
@@ -1061,7 +1116,11 @@ function handleDisconnect(socket) {
     for (const clientUuid in room.players) {
         send(room.players[clientUuid], {
             cmd: "player_disconnected",
-            content: { uuid: socket.userId }
+            content: {
+                uuid: socket.uuid,
+                userId: socket.userId,
+                name: player?.name || socket.username || "Jogador"
+            }
         });
     }
 
@@ -1096,7 +1155,8 @@ async function loadRoomsFromDb() {
                 selectedColors: savedRoom.selectedColors || {},
                 gameState: savedRoom.gameState || null,
                 createdAt: savedRoom.createdAt || Date.now(),
-                chat: savedRoom.chat || []
+                chat: savedRoom.chat || [],
+                eventHistory: savedRoom.eventHistory || []
             });
 
             if (Array.isArray(savedRoom.players)) {
@@ -1582,20 +1642,28 @@ function actionAttackTerritory(socket, room, content) {
     if (!room.gameState.territories || !room.gameState.territories[targetName]) {
         send(socket, {
             cmd: "error",
-            content: { msg: "Território inválido." }
+            content: { msg: "Territorio invalido." }
         });
-        console.log(`O player ${socket.username} tentou atacar um território inválido: ${targetName}`);
         return;
     }
 
     const territory = room.gameState.territories[targetName];
+    const defenderPlayer = playerlist.getByUserIdAndRoom(territory.ownerUserId, socket.roomId);
+
+    if (defenderPlayer?.offline === true && Number(defenderPlayer.protectedUntil || 0) > Date.now()) {
+        const secondsLeft = Math.ceil((Number(defenderPlayer.protectedUntil || 0) - Date.now()) / 1000);
+        send(socket, {
+            cmd: "error",
+            content: { msg: `Jogador desconectado protegido por ${secondsLeft}s.` }
+        });
+        return;
+    }
 
     if (String(territory.ownerUserId) === String(socket.userId)) {
         send(socket, {
             cmd: "error",
-            content: { msg: "Você não pode atacar seu próprio território." }
+            content: { msg: "Voce nao pode atacar seu proprio territorio." }
         });
-        console.log(`O player ${socket.username} tentou atacar seu próprio território: ${targetName}`);
         return;
     }
 
@@ -1604,27 +1672,29 @@ function actionAttackTerritory(socket, room, content) {
     if (attackTroops <= 0 || attackTroops > attackerStats.troops) {
         send(socket, {
             cmd: "error",
-            content: { msg: "Tropas inválidas para ataque." }
+            content: { msg: "Tropas invalidas para ataque." }
         });
-        console.log(`O player ${socket.username} tentou atacar o território ${targetName} com uma quantidade inválida de tropas: ${attackTroops}`);
         return;
     }
 
     const defenseTroops = Number(territory.troops || 0);
     const defenseBonus = Number(territory.defense || 0) * 25;
     const defenderPower = defenseTroops + defenseBonus;
+    const defenderName = String(territory.ownerName || defenderPlayer?.name || "Desconhecido");
 
     attackerStats.troops -= attackTroops;
 
     if (attackTroops > defenderPower) {
         const oldOwnerUserId = territory.ownerUserId;
+        const oldOwnerUuid = territory.ownerUuid;
+        const attackerRemainingTroops = Math.max(1, Math.floor(attackTroops - defenderPower));
+        const attackerLosses = attackTroops - attackerRemainingTroops;
 
         territory.ownerUserId = socket.userId;
         territory.ownerUuid = socket.uuid;
         territory.ownerName = socket.username;
         territory.color = getPlayerColorByUserId(room, socket.userId);
-
-        territory.troops = Math.max(1, Math.floor(attackTroops - defenderPower));
+        territory.troops = attackerRemainingTroops;
         territory.defense = Math.max(0, Number(territory.defense || 0) - 1);
 
         attackerStats.attacksWon = Number(attackerStats.attacksWon || 0) + 1;
@@ -1641,19 +1711,89 @@ function actionAttackTerritory(socket, room, content) {
                 color: territory.color
             }
         });
-        console.log(`Ataque ao território ${targetName} foi um sucesso parcial. Tropas restantes na defesa: ${territory.troops}`);
+
+        const result = {
+            venceu: true,
+            conquistou: true,
+            pais_atacado: targetName,
+            atacante: socket.username,
+            defensor: defenderName,
+            tropas_enviadas: attackTroops,
+            poder_defesa: defenderPower,
+            tropas_restantes: attackerRemainingTroops,
+            perdas_atacante: attackerLosses,
+            perdas_defensor: defenseTroops,
+            bonus_defesa: defenseBonus
+        };
+
+        send(socket, { cmd: "attack_result", content: result });
+
+        addRoomEvent(room, "territory_conquered", `${socket.username} conquistou ${targetName} de ${defenderName}.`, {
+            territory: targetName,
+            attacker: socket.username,
+            defender: defenderName,
+            lossesAttacker: attackerLosses,
+            lossesDefender: defenseTroops
+        });
+
+        const oldOwnerSocket = room.players[oldOwnerUuid];
+        if (oldOwnerSocket && oldOwnerSocket !== socket) {
+            send(oldOwnerSocket, {
+                cmd: "attack_result",
+                content: {
+                    ...result,
+                    defensor_view: true,
+                    venceu: false,
+                    perdeu_territorio: true
+                }
+            });
+        }
     } else {
         territory.troops = Math.max(0, defenseTroops - Math.floor(attackTroops / 2));
+        const defenderLosses = defenseTroops - territory.troops;
 
         attackerStats.attacksLost = Number(attackerStats.attacksLost || 0) + 1;
 
         const defenderStats = getPlayerStats(room, territory.ownerUserId);
         defenderStats.attacksWon = Number(defenderStats.attacksWon || 0) + 1;
-        send(socket, {
-            cmd: "action_result",
-            content: { msg: "Ataque falhou." }
+
+        const result = {
+            venceu: false,
+            conquistou: false,
+            pais_atacado: targetName,
+            atacante: socket.username,
+            defensor: defenderName,
+            tropas_enviadas: attackTroops,
+            poder_defesa: defenderPower,
+            tropas_restantes: 0,
+            tropas_defensor_restantes: territory.troops,
+            perdas_atacante: attackTroops,
+            perdas_defensor: defenderLosses,
+            bonus_defesa: defenseBonus
+        };
+
+        send(socket, { cmd: "attack_result", content: result });
+
+        addRoomEvent(room, "attack_defended", `${defenderName} defendeu ${targetName} do ataque de ${socket.username}.`, {
+            territory: targetName,
+            attacker: socket.username,
+            defender: defenderName,
+            lossesAttacker: attackTroops,
+            lossesDefender: defenderLosses
         });
-        console.log(`Ataque ao território ${targetName} falhou. Tropas restantes na defesa: ${territory.troops}`);
+
+        const defenderSocket = room.players[territory.ownerUuid];
+        if (defenderSocket && defenderSocket !== socket) {
+            send(defenderSocket, {
+                cmd: "attack_result",
+                content: {
+                    ...result,
+                    defensor_view: true,
+                    venceu: true,
+                    defendeu_territorio: true
+                }
+            });
+        }
     }
 }
 

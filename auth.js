@@ -85,12 +85,16 @@ async function login(socket, content) {
 
     const alreadyConnected = activeUsers.get(user.id);
 
-    if (alreadyConnected && alreadyConnected.readyState === WebSocket.OPEN) {
+    if (alreadyConnected && alreadyConnected.readyState === WebSocket.OPEN && content?.reconnect !== true) {
         send(socket, {
             cmd: "error",
             content: { msg: "Essa conta já está conectada em outro dispositivo." }
         });
         return;
+    }
+
+    if (alreadyConnected && alreadyConnected.readyState === WebSocket.OPEN) {
+        alreadyConnected.terminate();
     }
 
     activeUsers.delete(user.id);
