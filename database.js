@@ -21,6 +21,13 @@ async function initDatabase() {
         )
     `);
 
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN");
+    await db.query("UPDATE users SET email_verified = TRUE WHERE email_verified IS NULL");
+    await db.query("ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT FALSE");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token_hash TEXT");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expires TIMESTAMP");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP");
+
     await db.query(`
         CREATE TABLE IF NOT EXISTS saves (
             id SERIAL PRIMARY KEY,

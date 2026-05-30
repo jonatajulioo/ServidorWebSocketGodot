@@ -6,7 +6,7 @@ const bcrypt = require("bcrypt");
 
 const { initDatabase, db } = require("./database");
 const { send } = require("./utils");
-const { register, login, activeUsers } = require("./auth");
+const { register, login, verifyEmailToken, resendVerificationEmail, setAndSendVerificationEmail, activeUsers } = require("./auth");
 const rooms = require("./rooms");
 
 const app = express();
@@ -39,6 +39,8 @@ function publicUser(row) {
         id: row.id,
         username: row.username,
         email: row.email,
+        emailVerified: row.email_verified === true,
+        emailVerifiedAt: row.email_verified_at || null,
         createdAt: row.created_at,
         online: Boolean(activeSocket && activeSocket.readyState === WebSocket.OPEN),
         roomId: activeSocket?.roomId || null
@@ -162,9 +164,11 @@ function renderAdminPage() {
 
         function userCard(user) {
             const online = user.online ? "online" : "offline";
+            const verified = user.emailVerified ? "verificado" : "pendente";
             return '<article class="card">' +
                 '<div class="row"><strong>#' + user.id + ' ' + escapeHtml(user.username) + '</strong><span class="pill">' + online + '</span></div>' +
                 '<div class="muted">' + escapeHtml(user.email) + '</div>' +
+                '<div class="row"><span class="muted">E-mail</span><span>' + verified + '</span></div>' +
                 '<div class="row"><span class="muted">Sala atual</span><span>' + escapeHtml(user.roomId || "-") + '</span></div>' +
                 '<div class="toolbar" style="margin-top:12px">' +
                     '<button class="secondary" onclick="showUser(' + user.id + ')">Detalhes</button>' +
@@ -233,6 +237,8 @@ function renderAdminPage() {
                         '<button onclick="updateUser(' + user.id + ')">Salvar usuário</button>' +
                         '<input id="newPassword" type="password" placeholder="Nova senha">' +
                         '<button class="secondary" onclick="resetPassword(' + user.id + ')">Resetar senha</button>' +
+                        '<button class="secondary" onclick="verifyUserEmail(' + user.id + ')">Marcar e-mail como verificado</button>' +
+                        '<button class="secondary" onclick="resendUserEmail(' + user.id + ')">Reenviar verificação</button>' +
                     '</div>' +
                     '<pre>' + escapeHtml(JSON.stringify(user, null, 2)) + '</pre>';
             } catch (err) {
@@ -278,6 +284,25 @@ function renderAdminPage() {
             }
         }
 
+        async function verifyUserEmail(userId) {
+            try {
+                await api("/admin/api/users/" + userId + "/verify-email", { method: "POST" });
+                await loadUsers();
+                await showUser(userId);
+            } catch (err) {
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
+        async function resendUserEmail(userId) {
+            try {
+                await api("/admin/api/users/" + userId + "/verification-email", { method: "POST" });
+                statusEl.textContent = "E-mail de verificação reenviado.";
+            } catch (err) {
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
         async function deleteUser(userId) {
             if (!confirm("Apagar o usuário #" + userId + "? Isso também remove saves em que ele é host.")) return;
 
@@ -310,6 +335,23 @@ function renderAdminPage() {
 
 app.get("/admin", (_req, res) => {
     res.type("html").send(renderAdminPage());
+});
+
+app.get("/verify-email", async (req, res) => {
+    const user = await verifyEmailToken(req.query.token);
+
+    if (!user) {
+        res.status(400).type("html").send(`
+            <h1>Link invalido ou expirado</h1>
+            <p>Abra o jogo e solicite um novo e-mail de verificacao.</p>
+        `);
+        return;
+    }
+
+    res.type("html").send(`
+        <h1>E-mail verificado</h1>
+        <p>Conta ${String(user.username)} confirmada com sucesso. Voce ja pode voltar ao jogo e entrar.</p>
+    `);
 });
 
 app.get("/admin/api/rooms", requireAdmin, (_req, res) => {
@@ -350,7 +392,7 @@ app.get("/admin/api/users", requireAdmin, async (req, res) => {
     }
 
     const result = await db.query(
-        `SELECT id, username, email, created_at FROM users ${where} ORDER BY id DESC LIMIT 200`,
+        `SELECT id, username, email, email_verified, email_verified_at, created_at FROM users ${where} ORDER BY id DESC LIMIT 200`,
         params
     );
 
@@ -362,7 +404,7 @@ app.get("/admin/api/users", requireAdmin, async (req, res) => {
 app.get("/admin/api/users/:userId", requireAdmin, async (req, res) => {
     const userId = Number(req.params.userId || 0);
     const result = await db.query(
-        "SELECT id, username, email, created_at FROM users WHERE id = $1",
+        "SELECT id, username, email, email_verified, email_verified_at, created_at FROM users WHERE id = $1",
         [userId]
     );
 
@@ -399,7 +441,7 @@ app.patch("/admin/api/users/:userId", requireAdmin, async (req, res) => {
 
     try {
         const result = await db.query(
-            "UPDATE users SET username = $1, email = $2 WHERE id = $3 RETURNING id, username, email, created_at",
+            "UPDATE users SET username = $1, email = $2 WHERE id = $3 RETURNING id, username, email, email_verified, email_verified_at, created_at",
             [username, email, userId]
         );
 
@@ -452,6 +494,53 @@ app.post("/admin/api/users/:userId/password", requireAdmin, async (req, res) => 
     activeUsers.delete(userId);
 
     res.json({ ok: true });
+});
+
+app.post("/admin/api/users/:userId/verify-email", requireAdmin, async (req, res) => {
+    const userId = Number(req.params.userId || 0);
+    const result = await db.query(
+        `UPDATE users
+         SET email_verified = TRUE,
+             email_verified_at = CURRENT_TIMESTAMP,
+             email_verification_token_hash = NULL,
+             email_verification_expires = NULL
+         WHERE id = $1
+         RETURNING id, username, email, email_verified, email_verified_at, created_at`,
+        [userId]
+    );
+
+    if (result.rows.length === 0) {
+        res.status(404).json({ error: "Usuario nao encontrado." });
+        return;
+    }
+
+    res.json({ user: publicUser(result.rows[0]) });
+});
+
+app.post("/admin/api/users/:userId/verification-email", requireAdmin, async (req, res) => {
+    const userId = Number(req.params.userId || 0);
+    const result = await db.query(
+        "SELECT id, username, email, email_verified FROM users WHERE id = $1",
+        [userId]
+    );
+
+    if (result.rows.length === 0) {
+        res.status(404).json({ error: "Usuario nao encontrado." });
+        return;
+    }
+
+    const user = result.rows[0];
+
+    if (user.email_verified === true) {
+        res.status(400).json({ error: "Esse e-mail ja esta verificado." });
+        return;
+    }
+
+    const emailResult = await setAndSendVerificationEmail(user.id, user.username, user.email);
+    res.json({
+        ok: true,
+        emailSent: emailResult.sent === true
+    });
 });
 
 app.delete("/admin/api/users/:userId", requireAdmin, async (req, res) => {
@@ -557,6 +646,10 @@ wss.on("connection", (socket) => {
 
                 case "login":
                     await login(socket, data.content);
+                    break;
+
+                case "resend_verification_email":
+                    await resendVerificationEmail(socket, data.content);
                     break;
 
                 case "me":
