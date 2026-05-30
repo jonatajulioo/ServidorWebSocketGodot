@@ -1,9 +1,10 @@
 const express = require("express");
 const WebSocket = require("ws");
 const { randomUUID } = require("crypto");
+const bcrypt = require("bcrypt");
 
 
-const { initDatabase } = require("./database");
+const { initDatabase, db } = require("./database");
 const { send } = require("./utils");
 const { register, login, activeUsers } = require("./auth");
 const rooms = require("./rooms");
@@ -31,6 +32,19 @@ function requireAdmin(req, res, next) {
     next();
 }
 
+function publicUser(row) {
+    const activeSocket = activeUsers.get(Number(row.id));
+
+    return {
+        id: row.id,
+        username: row.username,
+        email: row.email,
+        createdAt: row.created_at,
+        online: Boolean(activeSocket && activeSocket.readyState === WebSocket.OPEN),
+        roomId: activeSocket?.roomId || null
+    };
+}
+
 function renderAdminPage() {
     return `<!doctype html>
 <html lang="pt-BR">
@@ -51,10 +65,12 @@ function renderAdminPage() {
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
         .card, .details { border: 1px solid #2b303b; border-radius: 8px; background: #181c24; padding: 14px; }
         .row { display: flex; justify-content: space-between; gap: 12px; margin: 6px 0; }
+        .section-title { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 10px; }
         .muted { color: #aab1c0; }
         .pill { display: inline-block; border-radius: 999px; padding: 3px 8px; background: #263142; font-size: 12px; }
         .players { margin-top: 10px; display: grid; gap: 6px; }
         .player { border-top: 1px solid #2b303b; padding-top: 8px; }
+        .form { display: grid; gap: 8px; margin-top: 10px; }
         pre { white-space: pre-wrap; word-break: break-word; max-height: 380px; overflow: auto; }
     </style>
 </head>
@@ -69,13 +85,26 @@ function renderAdminPage() {
     </header>
     <main>
         <section id="status" class="muted">Carregando...</section>
+        <div class="section-title">
+            <h2>Salas</h2>
+        </div>
         <section id="rooms" class="grid"></section>
+        <div class="section-title">
+            <h2>Usuários</h2>
+            <div class="toolbar">
+                <input id="userSearch" placeholder="Buscar usuário">
+                <button id="searchUsers">Buscar</button>
+            </div>
+        </div>
+        <section id="users" class="grid"></section>
         <section id="details" class="details" style="display:none; margin-top:12px;"></section>
     </main>
     <script>
         const tokenInput = document.getElementById("token");
         const statusEl = document.getElementById("status");
         const roomsEl = document.getElementById("rooms");
+        const usersEl = document.getElementById("users");
+        const userSearchEl = document.getElementById("userSearch");
         const detailsEl = document.getElementById("details");
 
         tokenInput.value = localStorage.getItem("sww_admin_token") || "";
@@ -86,6 +115,7 @@ function renderAdminPage() {
         };
 
         document.getElementById("refresh").onclick = loadRooms;
+        document.getElementById("searchUsers").onclick = loadUsers;
 
         function token() {
             return tokenInput.value.trim();
@@ -130,6 +160,19 @@ function renderAdminPage() {
             '</article>';
         }
 
+        function userCard(user) {
+            const online = user.online ? "online" : "offline";
+            return '<article class="card">' +
+                '<div class="row"><strong>#' + user.id + ' ' + escapeHtml(user.username) + '</strong><span class="pill">' + online + '</span></div>' +
+                '<div class="muted">' + escapeHtml(user.email) + '</div>' +
+                '<div class="row"><span class="muted">Sala atual</span><span>' + escapeHtml(user.roomId || "-") + '</span></div>' +
+                '<div class="toolbar" style="margin-top:12px">' +
+                    '<button class="secondary" onclick="showUser(' + user.id + ')">Detalhes</button>' +
+                    '<button class="danger" onclick="deleteUser(' + user.id + ')">Apagar</button>' +
+                '</div>' +
+            '</article>';
+        }
+
         async function loadRooms() {
             try {
                 statusEl.textContent = "Atualizando salas...";
@@ -138,6 +181,17 @@ function renderAdminPage() {
                 statusEl.textContent = data.rooms.length + " sala(s) encontrada(s).";
             } catch (err) {
                 roomsEl.innerHTML = "";
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
+        async function loadUsers() {
+            try {
+                const search = userSearchEl.value.trim();
+                const data = await api("/admin/api/users" + (search ? "?search=" + encodeURIComponent(search) : ""));
+                usersEl.innerHTML = data.users.map(userCard).join("");
+            } catch (err) {
+                usersEl.innerHTML = "";
                 statusEl.textContent = "Erro: " + err.message;
             }
         }
@@ -166,6 +220,77 @@ function renderAdminPage() {
             }
         }
 
+        async function showUser(userId) {
+            try {
+                const user = await api("/admin/api/users/" + userId);
+                detailsEl.style.display = "block";
+                detailsEl.innerHTML =
+                    '<div class="row"><strong>Usuário #' + user.id + '</strong>' +
+                    '<button class="secondary" onclick="detailsEl.style.display=\\'none\\'">Fechar</button></div>' +
+                    '<div class="form">' +
+                        '<input id="editUsername" value="' + escapeHtml(user.username) + '" placeholder="Username">' +
+                        '<input id="editEmail" value="' + escapeHtml(user.email) + '" placeholder="E-mail">' +
+                        '<button onclick="updateUser(' + user.id + ')">Salvar usuário</button>' +
+                        '<input id="newPassword" type="password" placeholder="Nova senha">' +
+                        '<button class="secondary" onclick="resetPassword(' + user.id + ')">Resetar senha</button>' +
+                    '</div>' +
+                    '<pre>' + escapeHtml(JSON.stringify(user, null, 2)) + '</pre>';
+            } catch (err) {
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
+        async function updateUser(userId) {
+            try {
+                await api("/admin/api/users/" + userId, {
+                    method: "PATCH",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                        username: document.getElementById("editUsername").value.trim(),
+                        email: document.getElementById("editEmail").value.trim()
+                    })
+                });
+                await loadUsers();
+                await showUser(userId);
+            } catch (err) {
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
+        async function resetPassword(userId) {
+            const password = document.getElementById("newPassword").value;
+
+            if (password.length < 4) {
+                alert("Use uma senha com pelo menos 4 caracteres.");
+                return;
+            }
+
+            try {
+                await api("/admin/api/users/" + userId + "/password", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ password })
+                });
+                document.getElementById("newPassword").value = "";
+                statusEl.textContent = "Senha alterada.";
+            } catch (err) {
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
+        async function deleteUser(userId) {
+            if (!confirm("Apagar o usuário #" + userId + "? Isso também remove saves em que ele é host.")) return;
+
+            try {
+                await api("/admin/api/users/" + userId, { method: "DELETE" });
+                detailsEl.style.display = "none";
+                await loadUsers();
+                await loadRooms();
+            } catch (err) {
+                statusEl.textContent = "Erro: " + err.message;
+            }
+        }
+
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, function (ch) {
                 return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[ch];
@@ -173,7 +298,11 @@ function renderAdminPage() {
         }
 
         loadRooms();
-        setInterval(loadRooms, 5000);
+        loadUsers();
+        setInterval(function () {
+            loadRooms();
+            loadUsers();
+        }, 5000);
     </script>
 </body>
 </html>`;
@@ -203,6 +332,148 @@ app.delete("/admin/api/rooms/:roomCode", requireAdmin, (req, res) => {
 
     if (!ok) {
         res.status(404).json({ error: "Sala nao encontrada." });
+        return;
+    }
+
+    res.json({ ok: true });
+});
+
+app.get("/admin/api/users", requireAdmin, async (req, res) => {
+    const search = String(req.query.search || "").trim();
+    const params = [];
+    let where = "";
+
+    if (search) {
+        params.push(`%${search}%`);
+        where = "WHERE username ILIKE $1 OR email ILIKE $1 OR CAST(id AS TEXT) = $2";
+        params.push(search);
+    }
+
+    const result = await db.query(
+        `SELECT id, username, email, created_at FROM users ${where} ORDER BY id DESC LIMIT 200`,
+        params
+    );
+
+    res.json({
+        users: result.rows.map(publicUser)
+    });
+});
+
+app.get("/admin/api/users/:userId", requireAdmin, async (req, res) => {
+    const userId = Number(req.params.userId || 0);
+    const result = await db.query(
+        "SELECT id, username, email, created_at FROM users WHERE id = $1",
+        [userId]
+    );
+
+    if (result.rows.length === 0) {
+        res.status(404).json({ error: "Usuario nao encontrado." });
+        return;
+    }
+
+    const saves = await db.query(
+        "SELECT room_code, status, updated_at FROM saves WHERE host_user_id = $1 ORDER BY updated_at DESC",
+        [userId]
+    );
+
+    res.json({
+        ...publicUser(result.rows[0]),
+        hostedSaves: saves.rows
+    });
+});
+
+app.patch("/admin/api/users/:userId", requireAdmin, async (req, res) => {
+    const userId = Number(req.params.userId || 0);
+    const username = String(req.body?.username || "").trim();
+    const email = String(req.body?.email || "").trim();
+
+    if (!username || !email) {
+        res.status(400).json({ error: "Username e e-mail sao obrigatorios." });
+        return;
+    }
+
+    if (username.length > 30 || email.length > 120) {
+        res.status(400).json({ error: "Username ou e-mail muito grande." });
+        return;
+    }
+
+    try {
+        const result = await db.query(
+            "UPDATE users SET username = $1, email = $2 WHERE id = $3 RETURNING id, username, email, created_at",
+            [username, email, userId]
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ error: "Usuario nao encontrado." });
+            return;
+        }
+
+        const activeSocket = activeUsers.get(userId);
+        if (activeSocket) {
+            activeSocket.username = username;
+            activeSocket.email = email;
+        }
+
+        res.json({ user: publicUser(result.rows[0]) });
+    } catch (err) {
+        if (err.code === "23505") {
+            res.status(409).json({ error: "Username ou e-mail ja esta em uso." });
+            return;
+        }
+
+        throw err;
+    }
+});
+
+app.post("/admin/api/users/:userId/password", requireAdmin, async (req, res) => {
+    const userId = Number(req.params.userId || 0);
+    const password = String(req.body?.password || "");
+
+    if (password.length < 4) {
+        res.status(400).json({ error: "Senha precisa ter pelo menos 4 caracteres." });
+        return;
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const result = await db.query(
+        "UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id",
+        [hash, userId]
+    );
+
+    if (result.rows.length === 0) {
+        res.status(404).json({ error: "Usuario nao encontrado." });
+        return;
+    }
+
+    const activeSocket = activeUsers.get(userId);
+    if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
+        activeSocket.terminate();
+    }
+    activeUsers.delete(userId);
+
+    res.json({ ok: true });
+});
+
+app.delete("/admin/api/users/:userId", requireAdmin, async (req, res) => {
+    const userId = Number(req.params.userId || 0);
+    const activeSocket = activeUsers.get(userId);
+
+    for (const room of rooms.getAdminRooms()) {
+        if (Number(room.hostUserId || 0) === userId) {
+            rooms.closeRoomByAdmin(room.roomCode, "admin_user_deleted");
+        }
+    }
+
+    if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
+        activeSocket.terminate();
+    }
+    activeUsers.delete(userId);
+
+    await db.query("DELETE FROM saves WHERE host_user_id = $1", [userId]);
+    const result = await db.query("DELETE FROM users WHERE id = $1 RETURNING id", [userId]);
+
+    if (result.rows.length === 0) {
+        res.status(404).json({ error: "Usuario nao encontrado." });
         return;
     }
 
