@@ -292,6 +292,98 @@ function finishRoomByVictory(roomCode, winnerInfo) {
     }, 1500);
 }
 
+function getTerritorySummary(room) {
+    const summary = {
+        total: 0,
+        byOwner: {}
+    };
+
+    if (!room?.gameState?.territories) {
+        return summary;
+    }
+
+    for (const territory of Object.values(room.gameState.territories)) {
+        if (!territory) {
+            continue;
+        }
+
+        summary.total += 1;
+
+        const ownerId = String(territory.ownerUserId || "sem_dono");
+        summary.byOwner[ownerId] = (summary.byOwner[ownerId] || 0) + 1;
+    }
+
+    return summary;
+}
+
+function getAdminRooms() {
+    return Array.from(rooms.entries()).map(([roomCode, room]) => ({
+        roomCode,
+        status: room.status,
+        online: room.online !== false,
+        hostUserId: room.hostUserId || null,
+        createdAt: room.createdAt || null,
+        players: getSerializablePlayers(roomCode),
+        playerCount: playerlist.getByRoom(roomCode).length,
+        connectedCount: Object.values(room.players || {}).filter((socket) => socket?.readyState === 1).length,
+        tradeCount: Object.keys(room.trades || {}).length,
+        territorySummary: getTerritorySummary(room)
+    }));
+}
+
+function getAdminRoom(roomCode) {
+    const state = buildRoomState(roomCode);
+    const room = rooms.get(roomCode);
+
+    if (!room || !state) {
+        return null;
+    }
+
+    return {
+        ...state,
+        online: room.online !== false,
+        chat: room.chat || [],
+        trades: room.trades || {},
+        connectedCount: Object.values(room.players || {}).filter((socket) => socket?.readyState === 1).length,
+        territorySummary: getTerritorySummary(room)
+    };
+}
+
+function closeRoomByAdmin(roomCode, reason = "admin") {
+    const room = rooms.get(roomCode);
+
+    if (!room) {
+        return false;
+    }
+
+    room.status = "closed";
+
+    addRoomEvent(room, "room_closed", "Sala encerrada pelo admin.", {
+        reason
+    });
+
+    broadcastToRoom(room, {
+        cmd: "room_closed",
+        content: {
+            reason,
+            msg: "Sala encerrada pelo admin."
+        }
+    });
+
+    for (const clientUuid in room.players) {
+        if (room.players[clientUuid]) {
+            room.players[clientUuid].roomId = null;
+        }
+    }
+
+    rooms.delete(roomCode);
+    playerlist.removeByRoom(roomCode);
+    deleteRoomSave(roomCode);
+    console.log(`Sala ${roomCode} encerrada pelo admin.`);
+
+    return true;
+}
+
 async function loadRoomStateFromDb(roomCode) {
     const res = await db.query(
         "SELECT save_data FROM saves WHERE room_code = $1",
@@ -2761,5 +2853,8 @@ module.exports = {
     upgradeMilitary,
     upgradeComercial,
     upgradeSaude,
+    getAdminRooms,
+    getAdminRoom,
+    closeRoomByAdmin,
     handleDisconnect
 };
