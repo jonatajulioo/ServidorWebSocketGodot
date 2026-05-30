@@ -2388,11 +2388,11 @@ function upgradeSaude(socket, content){
         const cat = stats.saude[category];
 
         if (cat === undefined) {
-            cat = {
-                saneamentoBasico: 0,
-                hospitais: 0,
-                laboratorios: 0
-            };
+                cat = {
+                    saneamentoBasico: 0,
+                    hospitais: 0,
+                    laboratorios: 0
+                };
         }
 
         if (cat[type] === undefined) {
