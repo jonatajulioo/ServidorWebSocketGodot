@@ -2193,6 +2193,11 @@ function confirmTrade(socket, content) {
 
     trade.status = "completed";
 
+    const requesterPlayer = playerlist.getByUserIdAndRoom(trade.requesterUserId, socket.roomId);
+    const targetPlayer = playerlist.getByUserIdAndRoom(trade.targetUserId, socket.roomId);
+    trade.requesterCountry = requesterPlayer?.country || null;
+    trade.targetCountry = targetPlayer?.country || null;
+
     const payload = {
         cmd: "trade_completed",
         content: trade
@@ -2200,6 +2205,18 @@ function confirmTrade(socket, content) {
 
     if (requesterSocket) send(requesterSocket, payload);
     if (targetSocket) send(targetSocket, payload);
+
+    broadcastToRoom(room, {
+        cmd: "trade_completed_visual",
+        content: trade
+    });
+
+    addRoomEvent(room, "trade_completed", `${trade.requesterName} concluiu uma troca com ${trade.targetName}.`, {
+        requesterUserId: trade.requesterUserId,
+        targetUserId: trade.targetUserId,
+        requesterCountry: trade.requesterCountry,
+        targetCountry: trade.targetCountry
+    });
 
     broadcastToRoom(room, {
         cmd: "game_state_updated",
